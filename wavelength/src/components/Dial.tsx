@@ -145,12 +145,25 @@ type DialProps = {
   onChange?: (v: number) => void;
   disabled?: boolean;
   showTarget?: number;
+  /** Team needle position, used for psychic + faded needle */
   teamNeedle?: number;
   leftLabel?: string;
   rightLabel?: string;
   mode?: "guess" | "psychic" | "reveal";
+  /** Whether the guesser's needle has been locked in */
   locked?: boolean;
+  /** Toggle lock state from the center button */
   onToggleLock?: () => void;
+  /**
+   * Optional teal cover over the playable area for guessers.
+   * When true, a teal semi-circle sits over the cream background.
+   */
+  showCover?: boolean;
+  /**
+   * When true, the teal cover animates as if rotating underneath the frame
+   * (we rotate it 180° so it disappears behind the clipped playable area).
+   */
+  coverRevealing?: boolean;
 };
 
 const LOCK_R = 24;
@@ -166,6 +179,8 @@ export function Dial({
   mode = "guess",
   locked = false,
   onToggleLock,
+  showCover = false,
+  coverRevealing = false,
 }: DialProps) {
   const angle = Math.PI * (1 - value);
   const nx = CX + R * Math.cos(angle);
@@ -193,7 +208,12 @@ export function Dial({
     onChange(t);
   };
 
-  const showZones = mode === "psychic" || mode === "reveal";
+  // Zones under teal cover during guess; full visibility for psychic / reveal.
+  const showZones =
+    target !== undefined &&
+    (mode === "psychic" ||
+      mode === "reveal" ||
+      (mode === "guess" && showCover));
   const showSolidNeedle = mode === "guess" || mode === "reveal";
   const showFadedNeedle = mode === "psychic" && teamAng !== null;
 
@@ -217,6 +237,12 @@ export function Dial({
   const cardX = CX - cardW / 2;
   const cardRx = 10;
   const halfW = cardW / 2;
+
+  // Teal cover uses the same geometry as the playable area, rotated when revealing.
+  const coverAngle = showCover ? (coverRevealing ? 180 : 0) : 180;
+
+  const needleColor =
+    mode === "reveal" ? "#DC2626" : locked ? "#16a34a" : "#DC2626";
 
   return (
     <div className="flex w-full flex-col items-center">
@@ -302,6 +328,20 @@ export function Dial({
               })()}
             </>
           )}
+
+          {/* Teal cover for guessers — sits over the cream/zones and rotates away on reveal */}
+          {showCover && (
+            <g
+              style={{
+                transformOrigin: `${CX}px ${CY}px`,
+                transformBox: "fill-box",
+                transition: "transform 700ms cubic-bezier(0.33, 1, 0.68, 1)",
+                transform: `rotate(${coverAngle}deg)`,
+              }}
+            >
+              <path d={roundedSemiD} fill="#4EB6B6" />
+            </g>
+          )}
         </g>
 
         {/* Faded team needle (psychic watching guessers) — on top of frame */}
@@ -329,7 +369,7 @@ export function Dial({
               y1={CY}
               x2={nx}
               y2={ny}
-              stroke={locked ? "#16a34a" : "#DC2626"}
+              stroke={needleColor}
               strokeWidth={7}
               strokeLinecap="round"
             />

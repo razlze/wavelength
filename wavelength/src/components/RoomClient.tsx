@@ -20,6 +20,10 @@ export function RoomClient({ code }: Props) {
   const [needle, setNeedle] = useState(0.5);
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** Guesser: cover stays until peel finishes after guessing → reveal. */
+  const [revealPeelDone, setRevealPeelDone] = useState(false);
+  const [revealCoverPeeling, setRevealCoverPeeling] = useState(false);
+  const prevRoundStatusRef = useRef<string | null>(null);
 
   useEffect(() => {
     const raw =
@@ -121,14 +125,57 @@ export function RoomClient({ code }: Props) {
   };
 
   useEffect(() => {
-    if (state?.round?.status !== "guessing") {
+    setRevealPeelDone(false);
+    setRevealCoverPeeling(false);
+  }, [state?.round?.id]);
+
+  useEffect(() => {
+    const status = state?.round?.status;
+    const prev = prevRoundStatusRef.current;
+    prevRoundStatusRef.current = status ?? null;
+
+    if (status !== "guessing") {
       if (countdownRef.current) {
         clearInterval(countdownRef.current);
         countdownRef.current = null;
       }
       setCountdown(null);
     }
-  }, [state?.round?.status]);
+
+    const psychicId = state?.round?.psychicId;
+    const meId = state?.meId;
+    const amGuesser =
+      !!psychicId &&
+      meId !== psychicId &&
+      !!state?.players.some((p) => p.id === meId);
+    const hasReveal = !!state?.round?.reveal;
+
+    if (status === "revealed" || status === "complete") {
+      if (!amGuesser || !hasReveal) return;
+      if (prev === "guessing") {
+        requestAnimationFrame(() => setRevealCoverPeeling(true));
+        const t = window.setTimeout(() => {
+          setRevealPeelDone(true);
+          setRevealCoverPeeling(false);
+        }, 720);
+        return () => window.clearTimeout(t);
+      }
+      setRevealPeelDone(true);
+      setRevealCoverPeeling(false);
+      return;
+    }
+
+    if (status === "guessing") {
+      setRevealPeelDone(false);
+      setRevealCoverPeeling(false);
+    }
+  }, [
+    state?.round?.status,
+    state?.round?.psychicId,
+    state?.meId,
+    state?.players,
+    state?.round?.reveal,
+  ]);
 
   const me = useMemo(() => {
     if (!state) return null;
@@ -191,6 +238,13 @@ export function RoomClient({ code }: Props) {
   }
 
   const isCandidate = state.psychicCandidateId === state.meId;
+
+  const dialReveal =
+    round?.status === "revealed" || round?.status === "complete";
+  const showDialBoard =
+    !!round?.theme &&
+    (round.status === "guessing" ||
+      (dialReveal && !!round.reveal));
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 pb-16">
@@ -331,48 +385,62 @@ export function RoomClient({ code }: Props) {
         </p>
       )}
 
-      {round?.status === "guessing" && round.theme && (
+      {showDialBoard && round.theme && (
         <div className="relative flex flex-col items-center gap-4">
           <Dial
-            mode={isPsychic ? "psychic" : "guess"}
-            value={
-              isPsychic && round.targetPosition !== undefined
-                ? round.targetPosition
-                : needle
+            mode={
+              dialReveal ? "reveal" : isPsychic ? "psychic" : "guess"
             }
-            teamNeedle={isPsychic ? needle : round.teamNeedle}
+            value={
+              dialReveal
+                ? round.reveal!.teamGuess
+                : isPsychic && round.targetPosition !== undefined
+                  ? round.targetPosition
+                  : needle
+            }
+            teamNeedle={
+              dialReveal ? undefined : isPsychic ? needle : round.teamNeedle
+            }
             onChange={
-              isPsychic
+              dialReveal || isPsychic
                 ? undefined
                 : (v) => {
                     setNeedle(v);
                     socket?.emit("player:needle_move", { position: v });
                   }
             }
-            disabled={!iGuess || locked}
+            disabled={dialReveal || !iGuess || locked}
             leftLabel={round.theme.left}
             rightLabel={round.theme.right}
-            showTarget={isPsychic ? round.targetPosition : undefined}
+            showTarget={
+              dialReveal ? round.reveal!.target : round.targetPosition
+            }
             locked={locked}
-            onToggleLock={iGuess ? toggleLock : undefined}
+            onToggleLock={!dialReveal && iGuess ? toggleLock : undefined}
+            showCover={
+              iGuess &&
+              !revealPeelDone &&
+              (round.status === "guessing" || dialReveal)
+            }
+            coverRevealing={iGuess && revealCoverPeeling}
           />
-          {isPsychic && (
+          {!dialReveal && isPsychic && (
             <p className="text-center text-sm text-[#4D8B8B]">
               You&apos;re the Psychic — give a clue! Don&apos;t reveal the
               target.
             </p>
           )}
-          {iGuess && !locked && (
+          {!dialReveal && iGuess && !locked && (
             <p className="text-center text-sm text-gray-400">
               Tap the center to approve
             </p>
           )}
-          {iGuess && locked && countdown === null && (
+          {!dialReveal && iGuess && locked && countdown === null && (
             <p className="text-center text-sm text-emerald-600">
               Approved! Waiting for others…
             </p>
           )}
-          {countdown !== null && (
+          {!dialReveal && countdown !== null && (
             <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
               <span
                 key={countdown}
@@ -383,19 +451,7 @@ export function RoomClient({ code }: Props) {
               </span>
             </div>
           )}
-        </div>
-      )}
-
-      {(round?.status === "revealed" || round?.status === "complete") &&
-        round.reveal && (
-          <div className="flex flex-col items-center gap-4">
-            <Dial
-              mode="reveal"
-              value={round.reveal.teamGuess}
-              showTarget={round.reveal.target}
-              leftLabel={round.theme?.left ?? "Left"}
-              rightLabel={round.theme?.right ?? "Right"}
-            />
+          {dialReveal && round.reveal && (
             <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
               <p className="text-3xl font-bold text-[#11163A]">
                 {round.reveal.score} pts
@@ -410,8 +466,9 @@ export function RoomClient({ code }: Props) {
                 </p>
               )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -160,12 +160,14 @@ export async function buildRoomState(
       roundNumber: round.roundNumber,
       status: round.status,
       psychicId: round.psychicPlayerId,
+      // Psychic-only during theme pick; during guessing everyone gets target so
+      // clients can draw scoring zones under the opaque cover for guessers.
       targetPosition:
-        isPsychic &&
-        (round.status === "psychic_setting_theme" ||
-          round.status === "guessing")
+        round.status === "guessing"
           ? (round.targetPosition ?? undefined)
-          : undefined,
+          : isPsychic && round.status === "psychic_setting_theme"
+            ? (round.targetPosition ?? undefined)
+            : undefined,
       theme:
         round.status === "psychic_setting_theme" && !isPsychic
           ? null
@@ -494,12 +496,22 @@ export async function executeCountdownReveal(roomId: string) {
     .filter((p) => p.id !== round.psychicPlayerId)
     .map((p) => p.id);
 
-  await prisma.guess.createMany({
-    data: guessers.map((pid) => ({
-      roundId: round.id,
-      playerId: pid,
-      position: pos,
-    })),
+  await prisma.$transaction(async (tx) => {
+    const current = await tx.round.findUnique({ where: { id: round.id } });
+    if (!current || current.status !== "guessing") return;
+
+    // Idempotency guard: if multiple countdown timers fire, keep only one guess
+    // per player by replacing any previous countdown-created guesses.
+    await tx.guess.deleteMany({ where: { roundId: round.id } });
+    if (guessers.length > 0) {
+      await tx.guess.createMany({
+        data: guessers.map((pid) => ({
+          roundId: round.id,
+          playerId: pid,
+          position: pos,
+        })),
+      });
+    }
   });
 
   await doReveal(roomId, round.id);

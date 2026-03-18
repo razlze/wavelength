@@ -182,9 +182,9 @@ export function attachGameSockets(io: IOServer) {
       try {
         const { allLocked } = await lockGuess(roomId, playerId);
         if (allLocked) {
-          io.to(`room:${room.code}`).emit("room:countdown_start");
           const rt = getRuntime(roomId);
-          if (rt) {
+          if (rt && rt.countdownTimer === null) {
+            io.to(`room:${room.code}`).emit("room:countdown_start");
             rt.countdownTimer = setTimeout(async () => {
               rt.countdownTimer = null;
               await executeCountdownReveal(roomId);
