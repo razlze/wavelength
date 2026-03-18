@@ -49,7 +49,7 @@ export function RoomClient({ code }: Props) {
     });
     s.on("connect", () => setErr(null));
     s.on("connect_error", () =>
-      setErr("Could not connect. Is the server running?")
+      setErr("Could not connect. Is the server running?"),
     );
     s.on("room:state", (payload: RoomStatePayload) => {
       setState(payload);
@@ -76,8 +76,7 @@ export function RoomClient({ code }: Props) {
   const createOrJoin = async (join: boolean) => {
     setErr(null);
     const nick =
-      nickname.trim() ||
-      `Guest${Math.floor(Math.random() * 9000 + 1000)}`;
+      nickname.trim() || `Guest${Math.floor(Math.random() * 9000 + 1000)}`;
     const url = join ? "/api/rooms/join" : "/api/rooms";
     const body = join
       ? JSON.stringify({ code: code.toUpperCase(), nickname: nick })
@@ -94,7 +93,7 @@ export function RoomClient({ code }: Props) {
     }
     localStorage.setItem(
       storageKey(code),
-      JSON.stringify({ token: data.token, playerId: data.player.id })
+      JSON.stringify({ token: data.token, playerId: data.player.id }),
     );
     setToken(data.token);
     setNickname(nick);
@@ -107,18 +106,17 @@ export function RoomClient({ code }: Props) {
 
   const isLeader = me?.isLeader ?? false;
   const canStart =
-    isLeader &&
-    state?.room.status === "lobby" &&
-    state.players.length >= 2;
+    isLeader && state?.room.status === "lobby" && state.players.length >= 2;
 
   if (!token) {
     return (
-      <div className="mx-auto flex max-w-md flex-col gap-6 rounded-2xl border border-violet-500/30 bg-violet-950/40 p-8">
-        <p className="text-center text-sm text-violet-200/80">
-          Room <span className="font-mono font-bold text-white">{code}</span>
+      <div className="mx-auto flex max-w-md flex-col gap-6 rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
+        <p className="text-center text-sm text-gray-500">
+          Room{" "}
+          <span className="font-mono font-bold text-[#11163A]">{code}</span>
         </p>
         <input
-          className="rounded-xl border border-violet-500/40 bg-black/30 px-4 py-3 text-white placeholder:text-violet-400/50"
+          className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A] placeholder:text-gray-400"
           placeholder="Your nickname"
           value={nickname}
           onChange={(e) => setNickname(e.target.value)}
@@ -127,19 +125,19 @@ export function RoomClient({ code }: Props) {
           <button
             type="button"
             onClick={() => createOrJoin(true)}
-            className="flex-1 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 py-3 font-semibold text-white"
+            className="flex-1 rounded-xl bg-[#11163A] py-3 font-semibold text-white"
           >
             Join room
           </button>
         </div>
-        {err && <p className="text-center text-sm text-red-400">{err}</p>}
+        {err && <p className="text-center text-sm text-red-500">{err}</p>}
       </div>
     );
   }
 
   if (!state) {
     return (
-      <div className="flex justify-center py-20 text-violet-200">
+      <div className="flex justify-center py-20 text-gray-400">
         Connecting…
       </div>
     );
@@ -151,23 +149,26 @@ export function RoomClient({ code }: Props) {
   const guessers = round?.psychicId
     ? state.players.filter((p) => p.id !== round.psychicId)
     : state.players;
-  const iGuess = round && !isPsychic && guessers.some((g) => g.id === state.meId);
+  const iGuess =
+    round && !isPsychic && guessers.some((g) => g.id === state.meId);
   const submitted = round?.submittedIds.includes(state.meId) ?? false;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 pb-16">
       {err && (
-        <div className="rounded-lg bg-red-950/50 px-4 py-2 text-center text-sm text-red-300">
+        <div className="rounded-lg bg-red-50 px-4 py-2 text-center text-sm text-red-600">
           {err}
         </div>
       )}
 
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-violet-500/20 pb-4">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4">
         <div>
-          <p className="text-xs uppercase tracking-widest text-violet-400">
+          <p className="text-xs uppercase tracking-widest text-gray-400">
             Room code
           </p>
-          <p className="font-mono text-2xl font-bold text-white">{state.room.code}</p>
+          <p className="font-mono text-2xl font-bold text-[#11163A]">
+            {state.room.code}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {isLeader && state.room.status === "lobby" && (
@@ -186,7 +187,7 @@ export function RoomClient({ code }: Props) {
               <button
                 type="button"
                 onClick={() => socket?.emit("leader:next_round")}
-                className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-lg bg-[#11163A] px-4 py-2 text-sm font-semibold text-white"
               >
                 Next round
               </button>
@@ -195,7 +196,7 @@ export function RoomClient({ code }: Props) {
             <button
               type="button"
               onClick={() => socket?.emit("leader:end_game")}
-              className="rounded-lg border border-violet-500/50 px-4 py-2 text-sm text-violet-200"
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm text-gray-600"
             >
               End game
             </button>
@@ -207,7 +208,7 @@ export function RoomClient({ code }: Props) {
               localStorage.removeItem(storageKey(code));
               window.location.href = "/";
             }}
-            className="rounded-lg border border-white/10 px-4 py-2 text-sm text-zinc-400"
+            className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-500"
           >
             Leave
           </button>
@@ -215,15 +216,15 @@ export function RoomClient({ code }: Props) {
       </header>
 
       <section>
-        <h2 className="mb-2 text-sm font-medium text-violet-300">Players</h2>
+        <h2 className="mb-2 text-sm font-medium text-gray-400">Players</h2>
         <ul className="flex flex-wrap gap-2">
           {state.players.map((p) => (
             <li
               key={p.id}
               className={`rounded-full px-3 py-1 text-sm ${
                 p.id === state.meId
-                  ? "bg-fuchsia-600/40 text-white"
-                  : "bg-white/5 text-violet-200"
+                  ? "bg-[#11163A]/10 font-medium text-[#11163A]"
+                  : "bg-gray-100 text-gray-700"
               }`}
             >
               {p.nickname}
@@ -236,37 +237,39 @@ export function RoomClient({ code }: Props) {
       </section>
 
       {state.room.status === "lobby" && (
-        <p className="text-center text-violet-200/80">
+        <p className="text-center text-gray-500">
           Waiting for the leader to start… Need at least 2 players.
         </p>
       )}
 
       {round?.status === "selecting_psychic" && (
-        <div className="rounded-2xl border border-violet-500/30 bg-black/20 p-6 text-center">
+        <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
           {isCandidate ? (
             <>
-              <p className="mb-4 text-lg text-white">You&apos;re up as Psychic</p>
+              <p className="mb-4 text-lg font-medium text-[#11163A]">
+                You&apos;re up as Psychic
+              </p>
               <div className="flex justify-center gap-3">
                 <button
                   type="button"
                   onClick={() => socket?.emit("psychic:accept")}
-                  className="rounded-xl bg-violet-600 px-6 py-3 font-semibold text-white"
+                  className="rounded-xl bg-[#11163A] px-6 py-3 font-semibold text-white"
                 >
                   I&apos;ll be Psychic
                 </button>
                 <button
                   type="button"
                   onClick={() => socket?.emit("psychic:skip")}
-                  className="rounded-xl border border-violet-500/50 px-6 py-3 text-violet-200"
+                  className="rounded-xl border border-gray-300 px-6 py-3 text-gray-600"
                 >
                   Skip
                 </button>
               </div>
             </>
           ) : (
-            <p className="text-violet-200">
+            <p className="text-gray-500">
               Waiting for{" "}
-              <strong>
+              <strong className="text-[#11163A]">
                 {state.players.find((p) => p.id === state.psychicCandidateId)
                   ?.nickname ?? "…"}
               </strong>{" "}
@@ -284,59 +287,81 @@ export function RoomClient({ code }: Props) {
       )}
 
       {round?.status === "psychic_setting_theme" && !isPsychic && (
-        <p className="text-center text-violet-200">Psychic is choosing the spectrum…</p>
+        <p className="text-center text-gray-500">
+          Psychic is choosing the spectrum…
+        </p>
       )}
 
       {round?.status === "guessing" && round.theme && (
-        <div className="flex flex-col items-center gap-6">
+        <div className="flex flex-col items-center gap-4">
           <Dial
-            value={needle}
-            onChange={(v) => {
-              setNeedle(v);
-              socket?.emit("player:needle_move", { position: v });
-            }}
-            disabled={!iGuess || submitted || isPsychic}
+            mode={isPsychic ? "psychic" : "guess"}
+            value={
+              isPsychic && round.targetPosition !== undefined
+                ? round.targetPosition
+                : needle
+            }
+            teamNeedle={isPsychic ? needle : round.teamNeedle}
+            onChange={
+              isPsychic
+                ? undefined
+                : (v) => {
+                    setNeedle(v);
+                    socket?.emit("player:needle_move", { position: v });
+                  }
+            }
+            disabled={!iGuess || submitted}
             leftLabel={round.theme.left}
             rightLabel={round.theme.right}
-            showTarget={
-              isPsychic ? round.targetPosition : undefined
-            }
+            showTarget={isPsychic ? round.targetPosition : undefined}
           />
-          {isPsychic && round.targetPosition !== undefined && (
-            <p className="text-center text-sm text-cyan-300">
-              Target zone center: {(round.targetPosition * 100).toFixed(0)}% — don&apos;t say it out loud!
+          {isPsychic && (
+            <p className="text-center text-sm text-[#4D8B8B]">
+              You&apos;re the Psychic — give a clue! Don&apos;t reveal the
+              target.
             </p>
           )}
           {iGuess && !submitted && (
             <button
               type="button"
               onClick={() => socket?.emit("player:guess_submit")}
-              className="rounded-xl bg-gradient-to-r from-pink-600 to-orange-500 px-10 py-3 font-bold text-white"
+              className="rounded-xl bg-[#DA5336] px-10 py-3 font-bold text-white shadow-sm"
             >
               Submit guess
             </button>
           )}
           {iGuess && submitted && (
-            <p className="text-violet-300">You submitted. Waiting for others…</p>
+            <p className="text-gray-400">
+              You submitted. Waiting for others…
+            </p>
           )}
         </div>
       )}
 
       {(round?.status === "revealed" || round?.status === "complete") &&
         round.reveal && (
-          <div className="rounded-2xl border border-cyan-500/30 bg-cyan-950/20 p-8 text-center">
-            <p className="text-3xl font-bold text-white">
-              {round.reveal.score} pts
-            </p>
-            <p className="mt-2 text-violet-200">
-              Target {(round.reveal.target * 100).toFixed(0)}% · Team{" "}
-              {(round.reveal.teamGuess * 100).toFixed(0)}%
-            </p>
-            {isLeader && (
-              <p className="mt-4 text-sm text-violet-400">
-                Press <strong>Next round</strong> when everyone is ready.
+          <div className="flex flex-col items-center gap-4">
+            <Dial
+              mode="reveal"
+              value={round.reveal.teamGuess}
+              showTarget={round.reveal.target}
+              leftLabel={round.theme?.left ?? "Left"}
+              rightLabel={round.theme?.right ?? "Right"}
+            />
+            <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
+              <p className="text-3xl font-bold text-[#11163A]">
+                {round.reveal.score} pts
               </p>
-            )}
+              <p className="mt-1 text-sm text-gray-500">
+                Target {(round.reveal.target * 100).toFixed(0)}% · Team{" "}
+                {(round.reveal.teamGuess * 100).toFixed(0)}%
+              </p>
+              {isLeader && (
+                <p className="mt-3 text-sm text-gray-400">
+                  Press <strong>Next round</strong> when everyone is ready.
+                </p>
+              )}
+            </div>
           </div>
         )}
     </div>
@@ -348,7 +373,11 @@ function PsychicThemeForm({
   onSubmit,
 }: {
   presets: { id: string; leftLabel: string; rightLabel: string }[];
-  onSubmit: (t: { kind: "custom"; left: string; right: string } | { kind: "preset"; presetId: string }) => void;
+  onSubmit: (
+    t:
+      | { kind: "custom"; left: string; right: string }
+      | { kind: "preset"; presetId: string },
+  ) => void;
 }) {
   const [mode, setMode] = useState<"preset" | "custom">("preset");
   const [left, setLeft] = useState("");
@@ -356,20 +385,22 @@ function PsychicThemeForm({
   const [presetId, setPresetId] = useState(presets[0]?.id ?? "");
 
   return (
-    <div className="rounded-2xl border border-violet-500/30 bg-black/30 p-6">
-      <p className="mb-4 text-lg font-medium text-white">Set the spectrum</p>
+    <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+      <p className="mb-4 text-lg font-medium text-[#11163A]">
+        Set the spectrum
+      </p>
       <div className="mb-4 flex gap-2">
         <button
           type="button"
           onClick={() => setMode("preset")}
-          className={`rounded-lg px-4 py-2 text-sm ${mode === "preset" ? "bg-violet-600 text-white" : "text-violet-300"}`}
+          className={`rounded-lg px-4 py-2 text-sm font-medium ${mode === "preset" ? "bg-[#11163A] text-white" : "text-gray-500"}`}
         >
           Presets
         </button>
         <button
           type="button"
           onClick={() => setMode("custom")}
-          className={`rounded-lg px-4 py-2 text-sm ${mode === "custom" ? "bg-violet-600 text-white" : "text-violet-300"}`}
+          className={`rounded-lg px-4 py-2 text-sm font-medium ${mode === "custom" ? "bg-[#11163A] text-white" : "text-gray-500"}`}
         >
           Custom
         </button>
@@ -377,7 +408,7 @@ function PsychicThemeForm({
       {mode === "preset" ? (
         <div className="flex flex-col gap-3">
           <select
-            className="rounded-xl border border-violet-500/40 bg-black/40 px-4 py-3 text-white"
+            className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A]"
             value={presetId}
             onChange={(e) => setPresetId(e.target.value)}
           >
@@ -390,22 +421,24 @@ function PsychicThemeForm({
           <button
             type="button"
             onClick={() => onSubmit({ kind: "preset", presetId })}
-            className="rounded-xl bg-violet-600 py-3 font-semibold text-white"
+            className="rounded-xl bg-[#11163A] py-3 font-semibold text-white"
           >
-            Lock in & start guessing
+            Lock in &amp; start guessing
           </button>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
           <input
-            className="rounded-xl border border-violet-500/40 bg-black/40 px-4 py-3 text-white"
+            className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A] placeholder:text-gray-400"
             placeholder="Left pole"
+            maxLength={28}
             value={left}
             onChange={(e) => setLeft(e.target.value)}
           />
           <input
-            className="rounded-xl border border-violet-500/40 bg-black/40 px-4 py-3 text-white"
+            className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A] placeholder:text-gray-400"
             placeholder="Right pole"
+            maxLength={28}
             value={right}
             onChange={(e) => setRight(e.target.value)}
           />
@@ -413,11 +446,15 @@ function PsychicThemeForm({
             type="button"
             disabled={!left.trim() || !right.trim()}
             onClick={() =>
-              onSubmit({ kind: "custom", left: left.trim(), right: right.trim() })
+              onSubmit({
+                kind: "custom",
+                left: left.trim(),
+                right: right.trim(),
+              })
             }
-            className="rounded-xl bg-violet-600 py-3 font-semibold text-white disabled:opacity-40"
+            className="rounded-xl bg-[#11163A] py-3 font-semibold text-white disabled:opacity-40"
           >
-            Lock in & start guessing
+            Lock in &amp; start guessing
           </button>
         </div>
       )}

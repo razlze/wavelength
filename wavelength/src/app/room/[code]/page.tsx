@@ -16,7 +16,7 @@ export default async function RoomPage({ params }: Props) {
     notFound();
   }
   return (
-    <main className="min-h-screen bg-gradient-to-b from-violet-950 via-purple-950 to-black py-8">
+    <main className="min-h-screen py-6">
       <RoomClient code={upper} />
     </main>
   );

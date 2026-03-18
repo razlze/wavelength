@@ -22,8 +22,8 @@ const needleSchema = z.object({ position: z.number().min(0).max(1) });
 const themeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("custom"),
-    left: z.string().min(1).max(64),
-    right: z.string().min(1).max(64),
+    left: z.string().min(1).max(28),
+    right: z.string().min(1).max(28),
     clue: z.string().max(200).optional(),
   }),
   z.object({ kind: z.literal("preset"), presetId: z.string().min(1) }),

@@ -30,7 +30,7 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || "Failed");
       localStorage.setItem(
         `wl:${data.room.code}`,
-        JSON.stringify({ token: data.token, playerId: data.player.id })
+        JSON.stringify({ token: data.token, playerId: data.player.id }),
       );
       router.push(`/room/${data.room.code}`);
     } catch (e) {
@@ -59,7 +59,7 @@ export default function Home() {
       if (!res.ok) throw new Error(data.error || "Failed");
       localStorage.setItem(
         `wl:${code}`,
-        JSON.stringify({ token: data.token, playerId: data.player.id })
+        JSON.stringify({ token: data.token, playerId: data.player.id }),
       );
       router.push(`/room/${code}`);
     } catch (e) {
@@ -70,24 +70,24 @@ export default function Home() {
   };
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-b from-violet-950 via-fuchsia-950/30 to-black px-6 py-16">
+    <main className="flex min-h-screen flex-col items-center justify-center px-6 py-16">
       <div className="mb-10 text-center">
-        <h1 className="bg-gradient-to-r from-violet-300 via-pink-300 to-orange-300 bg-clip-text text-4xl font-black tracking-tight text-transparent sm:text-5xl">
+        <h1 className="text-4xl font-black tracking-tight text-[#11163A] sm:text-5xl">
           Wavelength
         </h1>
-        <p className="mt-3 max-w-md text-sm text-violet-200/70">
+        <p className="mt-3 max-w-md text-sm text-gray-500">
           Read each other&apos;s minds. One psychic, one spectrum, one dial.
           Party game — not affiliated with the board game.
         </p>
       </div>
 
-      <div className="w-full max-w-md space-y-8 rounded-3xl border border-violet-500/25 bg-black/25 p-8 backdrop-blur-sm">
+      <div className="w-full max-w-md space-y-8 rounded-3xl border border-gray-200 bg-white p-8 shadow-sm">
         <div>
-          <label className="mb-2 block text-xs uppercase tracking-wider text-violet-400">
+          <label className="mb-2 block text-xs uppercase tracking-wider text-gray-400">
             Nickname
           </label>
           <input
-            className="w-full rounded-xl border border-violet-500/30 bg-violet-950/30 px-4 py-3 text-white placeholder:text-violet-500/50"
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A] placeholder:text-gray-400"
             placeholder={randomNick()}
             value={nickname}
             onChange={(e) => setNickname(e.target.value)}
@@ -99,13 +99,13 @@ export default function Home() {
             type="button"
             disabled={loading}
             onClick={create}
-            className="w-full rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 py-4 text-lg font-bold text-white shadow-lg shadow-violet-900/40 disabled:opacity-50"
+            className="w-full rounded-xl bg-[#11163A] py-4 text-lg font-bold text-white shadow-sm disabled:opacity-50"
           >
             Create room
           </button>
           <div className="flex gap-2">
             <input
-              className="min-w-0 flex-1 rounded-xl border border-violet-500/30 bg-violet-950/30 px-4 py-3 font-mono uppercase text-white placeholder:text-violet-500/50"
+              className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 font-mono uppercase text-[#11163A] placeholder:text-gray-400"
               placeholder="CODE"
               value={joinCode}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
@@ -115,22 +115,31 @@ export default function Home() {
               type="button"
               disabled={loading}
               onClick={join}
-              className="rounded-xl border border-violet-400/50 px-6 py-3 font-semibold text-violet-100 disabled:opacity-50"
+              className="rounded-xl border border-gray-300 px-6 py-3 font-semibold text-[#11163A] disabled:opacity-50"
             >
               Join
             </button>
           </div>
         </div>
 
-        {err && <p className="text-center text-sm text-red-400">{err}</p>}
+        {err && <p className="text-center text-sm text-red-500">{err}</p>}
       </div>
 
-      <p className="mt-10 max-w-sm text-center text-xs text-violet-500/60">
-        Run the app with <code className="rounded bg-white/5 px-1">npm run dev</code>{" "}
+      <p className="mt-10 max-w-sm text-center text-xs text-gray-400">
+        Run the app with{" "}
+        <code className="rounded bg-gray-100 px-1 text-gray-600">
+          npm run dev
+        </code>{" "}
         (custom server + Socket.IO). Set{" "}
-        <code className="rounded bg-white/5 px-1">DATABASE_URL</code> and{" "}
-        <code className="rounded bg-white/5 px-1">JWT_SECRET</code> in{" "}
-        <code className="rounded bg-white/5 px-1">.env</code>.
+        <code className="rounded bg-gray-100 px-1 text-gray-600">
+          DATABASE_URL
+        </code>{" "}
+        and{" "}
+        <code className="rounded bg-gray-100 px-1 text-gray-600">
+          JWT_SECRET
+        </code>{" "}
+        in{" "}
+        <code className="rounded bg-gray-100 px-1 text-gray-600">.env</code>.
       </p>
     </main>
   );

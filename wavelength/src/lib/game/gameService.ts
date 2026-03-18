@@ -354,8 +354,8 @@ export async function setTheme(roomId: string, playerId: string, theme: ThemePay
       where: { id: round.id },
       data: {
         themeCustom: JSON.stringify({
-          left: theme.left.slice(0, 64),
-          right: theme.right.slice(0, 64),
+          left: theme.left.slice(0, 28),
+          right: theme.right.slice(0, 28),
           clue: theme.clue?.slice(0, 200),
         }),
         themePresetId: null,
