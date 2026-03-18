@@ -1,0 +1,100 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Room {
+  id              String   @id @default(uuid())
+  code            String   @unique
+  status          RoomStatus
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  leaderPlayerId  String?
+
+  players Player[]
+  rounds  Round[]
+
+  @@index([code])
+}
+
+model Player {
+  id        String   @id @default(uuid())
+  roomId    String
+  nickname  String
+  isLeader  Boolean  @default(false)
+  joinedAt  DateTime @default(now())
+  leftAt    DateTime?
+
+  room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  rounds Round[] @relation("PsychicRounds")
+  guesses Guess[]
+
+  @@index([roomId])
+}
+
+model Round {
+  id               String        @id @default(uuid())
+  roomId           String
+  roundNumber      Int
+  psychicPlayerId  String?
+  themeCustom      String?
+  themePresetId    String?
+  targetPosition   Float?
+  status           RoundStatus
+  createdAt        DateTime      @default(now())
+
+  room        Room     @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  psychic     Player?  @relation("PsychicRounds", fields: [psychicPlayerId], references: [id])
+  themePreset ThemePreset? @relation(fields: [themePresetId], references: [id])
+  guesses     Guess[]
+
+  @@index([roomId])
+  @@index([psychicPlayerId])
+}
+
+model Guess {
+  id         String   @id @default(uuid())
+  roundId    String
+  playerId   String
+  position   Float
+  submittedAt DateTime @default(now())
+
+  round  Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([roundId])
+  @@index([playerId])
+}
+
+model ThemePreset {
+  id        String   @id @default(uuid())
+  leftLabel  String
+  rightLabel String
+  createdAt DateTime @default(now())
+
+  rounds Round[]
+}
+
+enum RoomStatus {
+  lobby
+  in_round
+  between_rounds
+  closed
+}
+
+enum RoundStatus {
+  selecting_psychic
+  psychic_setting_theme
+  guessing
+  revealed
+  complete
+}
