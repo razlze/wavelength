@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/src/lib/prisma";
-import { signPlayerToken } from "@/src/lib/tokens";
+import { log } from "@/lib/logger";
+import { prisma } from "@/lib/prisma";
+import { rateLimit } from "@/lib/rateLimit";
+import { signPlayerToken } from "@/lib/tokens";
 
 const createRoomSchema = z.object({
   nickname: z.string().min(1).max(32),
@@ -26,6 +28,12 @@ async function createUniqueRoomCode(): Promise<string> {
 }
 
 export async function POST(req: NextRequest) {
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  if (!rateLimit(`room:create:${ip}`, 20, 60_000)) {
+    log("warn", "rate_limit", { route: "POST /api/rooms", ip });
+    return NextResponse.json({ error: "Too many requests" }, { status: 429 });
+  }
   const json = await req.json().catch(() => null);
   const parsed = createRoomSchema.safeParse(json);
   if (!parsed.success) {

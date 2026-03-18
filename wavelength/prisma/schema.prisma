@@ -49,6 +49,8 @@ model Round {
   themeCustom      String?
   themePresetId    String?
   targetPosition   Float?
+  finalTeamGuess   Float?
+  score            Int?
   status           RoundStatus
   createdAt        DateTime      @default(now())
 

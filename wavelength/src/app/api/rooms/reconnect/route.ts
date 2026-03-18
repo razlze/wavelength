@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { prisma } from "@/src/lib/prisma";
-import { verifyPlayerToken } from "@/src/lib/tokens";
+import { prisma } from "@/lib/prisma";
+import { verifyPlayerToken } from "@/lib/tokens";
 
 const reconnectSchema = z.object({
   token: z.string().min(1),

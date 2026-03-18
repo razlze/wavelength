@@ -1,36 +1,55 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Wavelength (web)
 
-## Getting Started
+Party game: one **Psychic** per round picks a spectrum (e.g. Hot ↔ Cold); only they see the hidden target on the dial. Everyone else moves the shared needle and submits; then scores are revealed. The room leader advances rounds.
 
-First, run the development server:
+## Stack
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Next.js 16** (App Router) + **Tailwind**
+- **PostgreSQL** via **Prisma 7** + `@prisma/adapter-pg`
+- **Socket.IO** on a **custom Node server** (`server.ts`) — required for real-time play (Vercel serverless alone won’t host this socket server; use Fly.io, Render, Railway free tiers, or a small VPS).
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Setup
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. Copy `.env.example` → `.env` and set `DATABASE_URL` (e.g. Supabase free Postgres) and a strong `JWT_SECRET`.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+2. Push schema and seed theme presets:
 
-## Learn More
+   ```bash
+   npx prisma db push
+   npm run db:seed
+   ```
 
-To learn more about Next.js, take a look at the following resources:
+3. Dev (Next + Socket.IO on port 3000):
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+   ```bash
+   npm run dev
+   ```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+4. Production:
 
-## Deploy on Vercel
+   ```bash
+   npm run build
+   npm start
+   ```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Scripts
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+| Script        | Description                          |
+| ------------- | ------------------------------------ |
+| `npm run dev` | Custom server + hot reload           |
+| `npm run build` | Prisma generate + Next build        |
+| `npm start`   | Production server                   |
+| `npm test`    | Vitest (scoring + shuffle helpers)  |
+| `npm run db:push` | Apply schema to DB              |
+| `npm run db:seed` | Theme presets                    |
+
+## Production notes
+
+- **Rate limiting**: in-memory per IP on create/join APIs (replace with Redis for multi-instance).
+- **Logging**: JSON lines via `src/lib/logger.ts`.
+- **Errors**: add Sentry when you want (wizard integrates with Next; keep DSN in env).
+- **Scale-out**: multiple Node processes need sticky sessions or Redis adapter for Socket.IO.
+
+## License
+
+Not affiliated with the Wavelength board game. For personal / educational use.
