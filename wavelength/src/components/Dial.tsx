@@ -45,7 +45,7 @@ function pickCardColors(left: string, right: string): [string, string] {
   const n = CARD_COLORS.length;
   const h = simpleHash(left + "|" + right);
   const i1 = h % n;
-  const i2 = (i1 + 1 + (h >> 4) % (n - 1)) % n;
+  const i2 = (i1 + 1 + ((h >> 4) % (n - 1))) % n;
   return [CARD_COLORS[i1]!, CARD_COLORS[i2]!];
 }
 
@@ -71,28 +71,36 @@ const STAND_Y = CY + TOTAL_R - 30;
 const STAND_CR = 14;
 
 function buildStandPath() {
-  const tlx = CX - STAND_TOP_HALF, tly = STAND_Y;
-  const blx = CX - STAND_BOT_HALF, bly = STAND_Y + STAND_H;
-  const brx = CX + STAND_BOT_HALF, bry = STAND_Y + STAND_H;
-  const trx = CX + STAND_TOP_HALF, _try = STAND_Y;
+  const tlx = CX - STAND_TOP_HALF,
+    tly = STAND_Y;
+  const blx = CX - STAND_BOT_HALF,
+    bly = STAND_Y + STAND_H;
+  const brx = CX + STAND_BOT_HALF,
+    bry = STAND_Y + STAND_H;
+  const trx = CX + STAND_TOP_HALF,
+    _try = STAND_Y;
 
   // Left slant unit vector (top-left → bottom-left)
-  const ldx = blx - tlx, ldy = bly - tly;
+  const ldx = blx - tlx,
+    ldy = bly - tly;
   const llen = Math.sqrt(ldx * ldx + ldy * ldy);
-  const lux = ldx / llen, luy = ldy / llen;
+  const lux = ldx / llen,
+    luy = ldy / llen;
 
   // Right slant unit vector (bottom-right → top-right)
-  const rdx = trx - brx, rdy = _try - bry;
+  const rdx = trx - brx,
+    rdy = _try - bry;
   const rlen = Math.sqrt(rdx * rdx + rdy * rdy);
-  const rux = rdx / rlen, ruy = rdy / rlen;
+  const rux = rdx / rlen,
+    ruy = rdy / rlen;
 
   // Approach / depart points for bottom-left corner
-  const blIn  = { x: blx - lux * STAND_CR, y: bly - luy * STAND_CR };
-  const blOut = { x: blx + STAND_CR,        y: bly };
+  const blIn = { x: blx - lux * STAND_CR, y: bly - luy * STAND_CR };
+  const blOut = { x: blx + STAND_CR, y: bly };
 
   // Approach / depart points for bottom-right corner
-  const brIn  = { x: brx - STAND_CR,        y: bry };
-  const brOut = { x: brx + rux * STAND_CR,  y: bry + ruy * STAND_CR };
+  const brIn = { x: brx - STAND_CR, y: bry };
+  const brOut = { x: brx + rux * STAND_CR, y: bry + ruy * STAND_CR };
 
   return [
     `M ${tlx} ${tly}`,
@@ -141,7 +149,11 @@ type DialProps = {
   leftLabel?: string;
   rightLabel?: string;
   mode?: "guess" | "psychic" | "reveal";
+  locked?: boolean;
+  onToggleLock?: () => void;
 };
+
+const LOCK_R = 24;
 
 export function Dial({
   value,
@@ -152,6 +164,8 @@ export function Dial({
   leftLabel = "Left",
   rightLabel = "Right",
   mode = "guess",
+  locked = false,
+  onToggleLock,
 }: DialProps) {
   const angle = Math.PI * (1 - value);
   const nx = CX + R * Math.cos(angle);
@@ -268,21 +282,26 @@ export function Dial({
               {(() => {
                 const f = clamp01(target - BAND2);
                 const t = clamp01(target + BAND2);
-                return t > f ? <path d={sectorPath(f, t)} fill={ZONE2} /> : null;
+                return t > f ? (
+                  <path d={sectorPath(f, t)} fill={ZONE2} />
+                ) : null;
               })()}
               {(() => {
                 const f = clamp01(target - BAND3);
                 const t = clamp01(target + BAND3);
-                return t > f ? <path d={sectorPath(f, t)} fill={ZONE3} /> : null;
+                return t > f ? (
+                  <path d={sectorPath(f, t)} fill={ZONE3} />
+                ) : null;
               })()}
               {(() => {
                 const f = clamp01(target - BAND4);
                 const t = clamp01(target + BAND4);
-                return t > f ? <path d={sectorPath(f, t)} fill={ZONE4} /> : null;
+                return t > f ? (
+                  <path d={sectorPath(f, t)} fill={ZONE4} />
+                ) : null;
               })()}
             </>
           )}
-
         </g>
 
         {/* Faded team needle (psychic watching guessers) — on top of frame */}
@@ -298,7 +317,7 @@ export function Dial({
               strokeLinecap="round"
               opacity={0.35}
             />
-            <circle cx={CX} cy={CY} r={14} fill="#DC2626" opacity={0.35} />
+            <circle cx={CX} cy={CY} r={LOCK_R} fill="#DC2626" opacity={0.35} />
           </>
         )}
 
@@ -310,11 +329,46 @@ export function Dial({
               y1={CY}
               x2={nx}
               y2={ny}
-              stroke="#DC2626"
+              stroke={locked ? "#16a34a" : "#DC2626"}
               strokeWidth={7}
               strokeLinecap="round"
             />
-            <circle cx={CX} cy={CY} r={16} fill="#DC2626" />
+            {onToggleLock ? (
+              <g
+                style={{ cursor: "pointer" }}
+                onPointerDown={(e) => {
+                  e.stopPropagation();
+                  onToggleLock();
+                }}
+              >
+                <circle
+                  cx={CX}
+                  cy={CY}
+                  r={LOCK_R}
+                  fill={locked ? "#16a34a" : "#DC2626"}
+                />
+                {locked && (
+                  <svg
+                    x={CX - 12}
+                    y={CY - 12}
+                    width={24}
+                    height={24}
+                    viewBox="0 0 24 24"
+                    fill="none"
+                  >
+                    <path
+                      d="M4 12.6111L8.92308 17.5L20 6.5"
+                      stroke="white"
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
+              </g>
+            ) : (
+              <circle cx={CX} cy={CY} r={LOCK_R} fill="#DC2626" />
+            )}
           </>
         )}
 
@@ -330,7 +384,7 @@ export function Dial({
           const arrowY = cardY + 12; // near the top
 
           const arrowHalfLen = halfW * 0.22; // each arrow spans ~44% of its half
-          const leftCX = CX - halfW / 2;  // center x of left half
+          const leftCX = CX - halfW / 2; // center x of left half
           const rightCX = CX + halfW / 2; // center x of right half
 
           // Left arrow centered in left half, pointing left
@@ -344,19 +398,58 @@ export function Dial({
             <>
               <defs>
                 <clipPath id={clipId}>
-                  <rect x={cardX} y={cardY} width={cardW} height={cardH} rx={cardRx} />
+                  <rect
+                    x={cardX}
+                    y={cardY}
+                    width={cardW}
+                    height={cardH}
+                    rx={cardRx}
+                  />
                 </clipPath>
               </defs>
               {/* Left half */}
-              <rect x={cardX} y={cardY} width={halfW} height={cardH} fill={leftColor} clipPath={`url(#${clipId})`} />
+              <rect
+                x={cardX}
+                y={cardY}
+                width={halfW}
+                height={cardH}
+                fill={leftColor}
+                clipPath={`url(#${clipId})`}
+              />
               {/* Right half */}
-              <rect x={CX} y={cardY} width={halfW} height={cardH} fill={rightColor} clipPath={`url(#${clipId})`} />
+              <rect
+                x={CX}
+                y={cardY}
+                width={halfW}
+                height={cardH}
+                fill={rightColor}
+                clipPath={`url(#${clipId})`}
+              />
               {/* Outer rounded border */}
-              <rect x={cardX} y={cardY} width={cardW} height={cardH} rx={cardRx} fill="none" stroke="rgba(0,0,0,0.1)" strokeWidth={1} />
+              <rect
+                x={cardX}
+                y={cardY}
+                width={cardW}
+                height={cardH}
+                rx={cardRx}
+                fill="none"
+                stroke="rgba(0,0,0,0.1)"
+                strokeWidth={1}
+              />
 
               {/* Left arrow line + head */}
-              <line x1={laX1} y1={arrowY} x2={laX2 + 4} y2={arrowY} stroke={arrowColor} strokeWidth={arrowStroke} />
-              <polygon points={`${laX2 + 8},${arrowY - ah} ${laX2 - 2},${arrowY} ${laX2 + 8},${arrowY + ah}`} fill={arrowColor} />
+              <line
+                x1={laX1}
+                y1={arrowY}
+                x2={laX2 + 4}
+                y2={arrowY}
+                stroke={arrowColor}
+                strokeWidth={arrowStroke}
+              />
+              <polygon
+                points={`${laX2 + 8},${arrowY - ah} ${laX2 - 2},${arrowY} ${laX2 + 8},${arrowY + ah}`}
+                fill={arrowColor}
+              />
 
               {/* Left label — foreignObject for text wrapping */}
               <foreignObject x={cardX} y={cardY} width={halfW} height={cardH}>
@@ -386,8 +479,18 @@ export function Dial({
               </foreignObject>
 
               {/* Right arrow line + head */}
-              <line x1={raX1} y1={arrowY} x2={raX2 - 4} y2={arrowY} stroke={arrowColor} strokeWidth={arrowStroke} />
-              <polygon points={`${raX2 - 8},${arrowY - ah} ${raX2 + 2},${arrowY} ${raX2 - 8},${arrowY + ah}`} fill={arrowColor} />
+              <line
+                x1={raX1}
+                y1={arrowY}
+                x2={raX2 - 4}
+                y2={arrowY}
+                stroke={arrowColor}
+                strokeWidth={arrowStroke}
+              />
+              <polygon
+                points={`${raX2 - 8},${arrowY - ah} ${raX2 + 2},${arrowY} ${raX2 - 8},${arrowY + ah}`}
+                fill={arrowColor}
+              />
 
               {/* Right label — foreignObject for text wrapping */}
               <foreignObject x={CX} y={cardY} width={halfW} height={cardH}>

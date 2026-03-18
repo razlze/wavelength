@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
 import type { RoomStatePayload } from "@/lib/game/types";
 import { Dial } from "./Dial";
@@ -18,6 +18,8 @@ export function RoomClient({ code }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
   const [needle, setNeedle] = useState(0.5);
+  const [countdown, setCountdown] = useState<number | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const raw =
@@ -60,6 +62,25 @@ export function RoomClient({ code }: Props) {
     s.on("room:needle", (p: { teamNeedle: number }) => {
       setNeedle(p.teamNeedle);
     });
+    s.on("room:countdown_start", () => {
+      setCountdown(3);
+      if (countdownRef.current) clearInterval(countdownRef.current);
+      countdownRef.current = setInterval(() => {
+        setCountdown((c) => {
+          if (c !== null && c > 1) return c - 1;
+          if (countdownRef.current) clearInterval(countdownRef.current);
+          countdownRef.current = null;
+          return c;
+        });
+      }, 1000);
+    });
+    s.on("room:countdown_cancel", () => {
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+        countdownRef.current = null;
+      }
+      setCountdown(null);
+    });
     s.on("error:msg", (p: { message: string }) => setErr(p.message));
     s.on("room:closed", () => {
       setErr("Game ended.");
@@ -99,14 +120,42 @@ export function RoomClient({ code }: Props) {
     setNickname(nick);
   };
 
+  useEffect(() => {
+    if (state?.round?.status !== "guessing") {
+      if (countdownRef.current) {
+        clearInterval(countdownRef.current);
+        countdownRef.current = null;
+      }
+      setCountdown(null);
+    }
+  }, [state?.round?.status]);
+
   const me = useMemo(() => {
     if (!state) return null;
     return state.players.find((p) => p.id === state.meId) ?? null;
   }, [state]);
 
+  const round = state?.round ?? null;
+  const isPsychic = round?.psychicId === state?.meId;
+  const guessers = round?.psychicId
+    ? (state?.players.filter((p) => p.id !== round.psychicId) ?? [])
+    : (state?.players ?? []);
+  const iGuess =
+    round && !isPsychic && state ? guessers.some((g) => g.id === state.meId) : false;
+  const locked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+
+  const toggleLock = useCallback(() => {
+    if (!socket || !iGuess) return;
+    if (locked) {
+      socket.emit("player:unlock_guess");
+    } else {
+      socket.emit("player:lock_guess");
+    }
+  }, [socket, iGuess, locked]);
+
   const isLeader = me?.isLeader ?? false;
   const canStart =
-    isLeader && state?.room.status === "lobby" && state.players.length >= 2;
+    isLeader && state?.room.status === "lobby" && (state?.players.length ?? 0) >= 2;
 
   if (!token) {
     return (
@@ -137,21 +186,11 @@ export function RoomClient({ code }: Props) {
 
   if (!state) {
     return (
-      <div className="flex justify-center py-20 text-gray-400">
-        Connecting…
-      </div>
+      <div className="flex justify-center py-20 text-gray-400">Connecting…</div>
     );
   }
 
-  const round = state.round;
-  const isPsychic = round?.psychicId === state.meId;
   const isCandidate = state.psychicCandidateId === state.meId;
-  const guessers = round?.psychicId
-    ? state.players.filter((p) => p.id !== round.psychicId)
-    : state.players;
-  const iGuess =
-    round && !isPsychic && guessers.some((g) => g.id === state.meId);
-  const submitted = round?.submittedIds.includes(state.meId) ?? false;
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 pb-16">
@@ -293,7 +332,7 @@ export function RoomClient({ code }: Props) {
       )}
 
       {round?.status === "guessing" && round.theme && (
-        <div className="flex flex-col items-center gap-4">
+        <div className="relative flex flex-col items-center gap-4">
           <Dial
             mode={isPsychic ? "psychic" : "guess"}
             value={
@@ -310,10 +349,12 @@ export function RoomClient({ code }: Props) {
                     socket?.emit("player:needle_move", { position: v });
                   }
             }
-            disabled={!iGuess || submitted}
+            disabled={!iGuess || locked}
             leftLabel={round.theme.left}
             rightLabel={round.theme.right}
             showTarget={isPsychic ? round.targetPosition : undefined}
+            locked={locked}
+            onToggleLock={iGuess ? toggleLock : undefined}
           />
           {isPsychic && (
             <p className="text-center text-sm text-[#4D8B8B]">
@@ -321,19 +362,26 @@ export function RoomClient({ code }: Props) {
               target.
             </p>
           )}
-          {iGuess && !submitted && (
-            <button
-              type="button"
-              onClick={() => socket?.emit("player:guess_submit")}
-              className="rounded-xl bg-[#DA5336] px-10 py-3 font-bold text-white shadow-sm"
-            >
-              Submit guess
-            </button>
-          )}
-          {iGuess && submitted && (
-            <p className="text-gray-400">
-              You submitted. Waiting for others…
+          {iGuess && !locked && (
+            <p className="text-center text-sm text-gray-400">
+              Tap the center to approve
             </p>
+          )}
+          {iGuess && locked && countdown === null && (
+            <p className="text-center text-sm text-emerald-600">
+              Approved! Waiting for others…
+            </p>
+          )}
+          {countdown !== null && (
+            <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+              <span
+                key={countdown}
+                className="animate-ping text-[120px] font-black text-white drop-shadow-[0_0_40px_rgba(0,0,0,0.7)]"
+                style={{ animationDuration: "0.8s", animationIterationCount: 1 }}
+              >
+                {countdown}
+              </span>
+            </div>
           )}
         </div>
       )}

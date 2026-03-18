@@ -3,9 +3,12 @@ import { prisma } from "@/lib/prisma";
 import { verifyPlayerToken } from "@/lib/tokens";
 import {
   buildRoomState,
+  executeCountdownReveal,
+  getRuntime,
   leaderEndGame,
   leaderNextRound,
   leaveRoom,
+  lockGuess,
   onSocketDisconnect,
   psychicAccept,
   psychicSkip,
@@ -14,7 +17,7 @@ import {
   setTeamNeedle,
   setTheme,
   startGame,
-  submitGuess,
+  unlockGuess,
 } from "@/lib/game/gameService";
 import { z } from "zod";
 
@@ -157,17 +160,52 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:needle_move", async (raw: unknown) => {
       const parsed = needleSchema.safeParse(raw);
       if (!parsed.success) return;
-      await setTeamNeedle(roomId, playerId, parsed.data.position);
+      const { othersReset, countdownCancelled } = await setTeamNeedle(
+        roomId,
+        playerId,
+        parsed.data.position,
+      );
       const state = await buildRoomState(roomId, playerId);
       if (!state?.round || state.round.status !== "guessing") return;
       io.to(`room:${room.code}`).emit("room:needle", {
         teamNeedle: state.round.teamNeedle,
       });
+      if (countdownCancelled) {
+        io.to(`room:${room.code}`).emit("room:countdown_cancel");
+      }
+      if (othersReset) {
+        await broadcastRoom(io, roomId);
+      }
     });
 
-    socket.on("player:guess_submit", async () => {
+    socket.on("player:lock_guess", async () => {
       try {
-        await submitGuess(roomId, playerId);
+        const { allLocked } = await lockGuess(roomId, playerId);
+        if (allLocked) {
+          io.to(`room:${room.code}`).emit("room:countdown_start");
+          const rt = getRuntime(roomId);
+          if (rt) {
+            rt.countdownTimer = setTimeout(async () => {
+              rt.countdownTimer = null;
+              await executeCountdownReveal(roomId);
+              await broadcastRoom(io, roomId);
+            }, 3500);
+          }
+        }
+        await broadcastRoom(io, roomId);
+      } catch (e) {
+        socket.emit("error:msg", {
+          message: e instanceof Error ? e.message : "Error",
+        });
+      }
+    });
+
+    socket.on("player:unlock_guess", async () => {
+      try {
+        const { wasCounting } = await unlockGuess(roomId, playerId);
+        if (wasCounting) {
+          io.to(`room:${room.code}`).emit("room:countdown_cancel");
+        }
         await broadcastRoom(io, roomId);
       } catch (e) {
         socket.emit("error:msg", {

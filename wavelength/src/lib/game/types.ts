@@ -29,7 +29,7 @@ export type RoomStatePayload = {
       clue?: string;
     };
     teamNeedle: number;
-    submittedIds: string[];
+    lockedIds: string[];
     /** After reveal */
     reveal?: {
       target: number;
@@ -48,6 +48,7 @@ export type RoomRuntime = {
   /** Offset during skip cycle within selecting_psychic */
   candidateSkipOffset: number;
   teamNeedle: number;
-  submittedGuessers: Set<string>;
+  lockedGuessers: Set<string>;
   socketByPlayer: Map<string, string>;
+  countdownTimer: ReturnType<typeof setTimeout> | null;
 };

@@ -16,15 +16,25 @@ function ensureRuntime(roomId: string): RoomRuntime {
       psychicBaseIndex: 0,
       candidateSkipOffset: 0,
       teamNeedle: 0.5,
-      submittedGuessers: new Set(),
+      lockedGuessers: new Set(),
       socketByPlayer: new Map(),
+      countdownTimer: null,
     };
     runtimes.set(roomId, r);
   }
   return r;
 }
 
+function clearCountdown(rt: RoomRuntime) {
+  if (rt.countdownTimer) {
+    clearTimeout(rt.countdownTimer);
+    rt.countdownTimer = null;
+  }
+}
+
 function deleteRuntime(roomId: string) {
+  const rt = runtimes.get(roomId);
+  if (rt) clearCountdown(rt);
   runtimes.delete(roomId);
 }
 
@@ -74,7 +84,7 @@ function currentPsychicCandidateId(rt: RoomRuntime): string | null {
 
 export async function buildRoomState(
   roomId: string,
-  meId: string
+  meId: string,
 ): Promise<RoomStatePayload | null> {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
@@ -140,9 +150,9 @@ export async function buildRoomState(
     const guesserIds = room.players
       .filter((p) => p.id !== round.psychicPlayerId)
       .map((p) => p.id);
-    const submittedIds =
+    const lockedIds =
       round.status === "guessing" || round.status === "psychic_setting_theme"
-        ? Array.from(rt?.submittedGuessers ?? [])
+        ? Array.from(rt?.lockedGuessers ?? [])
         : round.guesses.map((g) => g.playerId);
 
     roundPayload = {
@@ -152,7 +162,8 @@ export async function buildRoomState(
       psychicId: round.psychicPlayerId,
       targetPosition:
         isPsychic &&
-        (round.status === "psychic_setting_theme" || round.status === "guessing")
+        (round.status === "psychic_setting_theme" ||
+          round.status === "guessing")
           ? (round.targetPosition ?? undefined)
           : undefined,
       theme:
@@ -162,7 +173,7 @@ export async function buildRoomState(
             ? null
             : theme,
       teamNeedle: rt?.teamNeedle ?? 0.5,
-      submittedIds,
+      lockedIds,
       reveal:
         round.status === "revealed" || round.status === "complete"
           ? {
@@ -184,7 +195,11 @@ export async function buildRoomState(
   };
 }
 
-export function registerSocket(roomId: string, playerId: string, socketId: string) {
+export function registerSocket(
+  roomId: string,
+  playerId: string,
+  socketId: string,
+) {
   const rt = ensureRuntime(roomId);
   rt.socketByPlayer.set(playerId, socketId);
 }
@@ -225,7 +240,8 @@ export async function startGame(roomId: string, leaderId: string) {
   rt.psychicBaseIndex = Math.floor(Math.random() * rt.playerOrder.length);
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
-  rt.submittedGuessers = new Set();
+  rt.lockedGuessers = new Set();
+  clearCountdown(rt);
 
   await prisma.$transaction([
     prisma.room.update({
@@ -244,7 +260,7 @@ export async function startGame(roomId: string, leaderId: string) {
 
 async function abortActiveRoundAndStartNew(
   roomId: string,
-  skipPsychicId: string | null
+  skipPsychicId: string | null,
 ) {
   const rt = ensureRuntime(roomId);
   const last = await prisma.round.findFirst({
@@ -276,7 +292,8 @@ async function abortActiveRoundAndStartNew(
   }
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
-  rt.submittedGuessers = new Set();
+  rt.lockedGuessers = new Set();
+  clearCountdown(rt);
 
   const nextNum = last.roundNumber + 1;
   await prisma.round.create({
@@ -333,7 +350,11 @@ export async function psychicSkip(roomId: string, playerId: string) {
   }
 }
 
-export async function setTheme(roomId: string, playerId: string, theme: ThemePayload) {
+export async function setTheme(
+  roomId: string,
+  playerId: string,
+  theme: ThemePayload,
+) {
   const round = await prisma.round.findFirst({
     where: { roomId },
     orderBy: { roundNumber: "desc" },
@@ -347,7 +368,8 @@ export async function setTheme(roomId: string, playerId: string, theme: ThemePay
 
   const rt = ensureRuntime(roomId);
   rt.teamNeedle = 0.5;
-  rt.submittedGuessers = new Set();
+  rt.lockedGuessers = new Set();
+  clearCountdown(rt);
 
   if (theme.kind === "custom") {
     await prisma.round.update({
@@ -381,57 +403,106 @@ export async function setTheme(roomId: string, playerId: string, theme: ThemePay
 export async function setTeamNeedle(
   roomId: string,
   playerId: string,
-  position: number
-) {
+  position: number,
+): Promise<{ othersReset: boolean; countdownCancelled: boolean }> {
+  const none = { othersReset: false, countdownCancelled: false };
   const clamp = Math.max(0, Math.min(1, position));
   const round = await prisma.round.findFirst({
     where: { roomId },
     orderBy: { roundNumber: "desc" },
   });
-  if (!round || round.status !== "guessing") return;
-  if (round.psychicPlayerId === playerId) return;
+  if (!round || round.status !== "guessing") return none;
+  if (round.psychicPlayerId === playerId) return none;
   const rt = ensureRuntime(roomId);
-  if (rt.submittedGuessers.has(playerId)) return;
+  if (rt.lockedGuessers.has(playerId)) return none;
   rt.teamNeedle = clamp;
+
+  const othersReset = rt.lockedGuessers.size > 0;
+  if (othersReset) rt.lockedGuessers.clear();
+  const countdownCancelled = rt.countdownTimer !== null;
+  if (countdownCancelled) clearCountdown(rt);
+
+  return { othersReset, countdownCancelled };
 }
 
-export async function submitGuess(roomId: string, playerId: string) {
+export async function lockGuess(
+  roomId: string,
+  playerId: string,
+): Promise<{ allLocked: boolean }> {
   const round = await prisma.round.findFirst({
     where: { roomId },
     orderBy: { roundNumber: "desc" },
-    include: { room: { include: { players: { where: activePlayersWhere() } } } },
+    include: {
+      room: { include: { players: { where: activePlayersWhere() } } },
+    },
   });
   if (!round || round.status !== "guessing") {
     throw new Error("Not in guessing phase");
   }
   if (round.psychicPlayerId === playerId) {
-    throw new Error("Psychic cannot guess");
+    throw new Error("Psychic cannot lock");
   }
   const rt = ensureRuntime(roomId);
-  if (rt.submittedGuessers.has(playerId)) {
-    throw new Error("Already submitted");
-  }
-
-  const pos = rt.teamNeedle;
-  await prisma.guess.create({
-    data: {
-      roundId: round.id,
-      playerId,
-      position: pos,
-    },
-  });
-  rt.submittedGuessers.add(playerId);
+  rt.lockedGuessers.add(playerId);
 
   const guessers = round.room.players
     .filter((p) => p.id !== round.psychicPlayerId)
     .map((p) => p.id);
-  const allIn =
+  const allLocked =
     guessers.length > 0 &&
-    guessers.every((id) => rt.submittedGuessers.has(id));
+    guessers.every((id) => rt.lockedGuessers.has(id));
 
-  if (allIn) {
-    await doReveal(roomId, round.id);
+  return { allLocked };
+}
+
+export async function unlockGuess(
+  roomId: string,
+  playerId: string,
+): Promise<{ wasCounting: boolean }> {
+  const round = await prisma.round.findFirst({
+    where: { roomId },
+    orderBy: { roundNumber: "desc" },
+  });
+  if (!round || round.status !== "guessing") {
+    throw new Error("Not in guessing phase");
   }
+  if (round.psychicPlayerId === playerId) {
+    throw new Error("Psychic cannot unlock");
+  }
+  const rt = ensureRuntime(roomId);
+  rt.lockedGuessers.delete(playerId);
+
+  const wasCounting = rt.countdownTimer !== null;
+  clearCountdown(rt);
+  return { wasCounting };
+}
+
+export async function executeCountdownReveal(roomId: string) {
+  const round = await prisma.round.findFirst({
+    where: { roomId },
+    orderBy: { roundNumber: "desc" },
+    include: {
+      room: { include: { players: { where: activePlayersWhere() } } },
+    },
+  });
+  if (!round || round.status !== "guessing") return;
+
+  const rt = ensureRuntime(roomId);
+  const pos = rt.teamNeedle;
+
+  const guessers = round.room.players
+    .filter((p) => p.id !== round.psychicPlayerId)
+    .map((p) => p.id);
+
+  await prisma.guess.createMany({
+    data: guessers.map((pid) => ({
+      roundId: round.id,
+      playerId: pid,
+      position: pos,
+    })),
+  });
+
+  await doReveal(roomId, round.id);
 }
 
 async function doReveal(roomId: string, roundId: string) {
@@ -481,13 +552,14 @@ export async function leaderNextRound(roomId: string, leaderId: string) {
   });
 
   const rt = ensureRuntime(roomId);
+  clearCountdown(rt);
   const n = rt.playerOrder.length;
   if (n > 0) {
     rt.psychicBaseIndex = (rt.psychicBaseIndex + 1) % n;
   }
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
-  rt.submittedGuessers = new Set();
+  rt.lockedGuessers = new Set();
 
   await prisma.round.create({
     data: {
@@ -575,7 +647,7 @@ export async function leaveRoom(roomId: string, playerId: string) {
     }
     rt.candidateSkipOffset = Math.min(
       rt.candidateSkipOffset,
-      Math.max(0, rt.playerOrder.length - 1)
+      Math.max(0, rt.playerOrder.length - 1),
     );
   }
 }
