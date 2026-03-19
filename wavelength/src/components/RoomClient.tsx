@@ -212,6 +212,12 @@ export function RoomClient({ code }: Props) {
       clearTimeout(lockRequestTimeoutRef.current);
       lockRequestTimeoutRef.current = null;
     }
+
+    // Server resets runtime sequence numbers between rounds (e.g. `needleSeq`).
+    // Reset our local monotonic guards too, otherwise we would incorrectly
+    // ignore all subsequent `room:needle` updates after the first round.
+    lastNeedleSeqRef.current = 0;
+    lastNeedleDominionSeqRef.current = 0;
   }, [state?.round?.id]);
 
   useEffect(() => {
