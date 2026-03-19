@@ -29,6 +29,8 @@ export type RoomStatePayload = {
       clue?: string;
     };
     teamNeedle: number;
+    /** Monotonic sequence for teamNeedle updates (guards against reordering) */
+    needleSeq: number;
     lockedIds: string[];
     /** After reveal */
     reveal?: {
@@ -48,6 +50,7 @@ export type RoomRuntime = {
   /** Offset during skip cycle within selecting_psychic */
   candidateSkipOffset: number;
   teamNeedle: number;
+  needleSeq: number;
   lockedGuessers: Set<string>;
   socketByPlayer: Map<string, string>;
   countdownTimer: ReturnType<typeof setTimeout> | null;

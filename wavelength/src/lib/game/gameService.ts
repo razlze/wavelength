@@ -16,6 +16,7 @@ function ensureRuntime(roomId: string): RoomRuntime {
       psychicBaseIndex: 0,
       candidateSkipOffset: 0,
       teamNeedle: 0.5,
+      needleSeq: 0,
       lockedGuessers: new Set(),
       socketByPlayer: new Map(),
       countdownTimer: null,
@@ -175,6 +176,7 @@ export async function buildRoomState(
             ? null
             : theme,
       teamNeedle: rt?.teamNeedle ?? 0.5,
+      needleSeq: rt?.needleSeq ?? 0,
       lockedIds,
       reveal:
         round.status === "revealed" || round.status === "complete"
@@ -242,6 +244,7 @@ export async function startGame(roomId: string, leaderId: string) {
   rt.psychicBaseIndex = Math.floor(Math.random() * rt.playerOrder.length);
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
+  rt.needleSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -294,6 +297,7 @@ async function abortActiveRoundAndStartNew(
   }
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
+  rt.needleSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -370,6 +374,7 @@ export async function setTheme(
 
   const rt = ensureRuntime(roomId);
   rt.teamNeedle = 0.5;
+  rt.needleSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -406,8 +411,18 @@ export async function setTeamNeedle(
   roomId: string,
   playerId: string,
   position: number,
-): Promise<{ othersReset: boolean; countdownCancelled: boolean }> {
-  const none = { othersReset: false, countdownCancelled: false };
+): Promise<{
+  othersReset: boolean;
+  countdownCancelled: boolean;
+  teamNeedle: number | null;
+  needleSeq: number | null;
+}> {
+  const none = {
+    othersReset: false,
+    countdownCancelled: false,
+    teamNeedle: null,
+    needleSeq: null,
+  };
   const clamp = Math.max(0, Math.min(1, position));
   const round = await prisma.round.findFirst({
     where: { roomId },
@@ -418,13 +433,19 @@ export async function setTeamNeedle(
   const rt = ensureRuntime(roomId);
   if (rt.lockedGuessers.has(playerId)) return none;
   rt.teamNeedle = clamp;
+  rt.needleSeq += 1;
 
   const othersReset = rt.lockedGuessers.size > 0;
   if (othersReset) rt.lockedGuessers.clear();
   const countdownCancelled = rt.countdownTimer !== null;
   if (countdownCancelled) clearCountdown(rt);
 
-  return { othersReset, countdownCancelled };
+  return {
+    othersReset,
+    countdownCancelled,
+    teamNeedle: rt.teamNeedle,
+    needleSeq: rt.needleSeq,
+  };
 }
 
 export async function lockGuess(
@@ -571,6 +592,7 @@ export async function leaderNextRound(roomId: string, leaderId: string) {
   }
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
+  rt.needleSeq = 0;
   rt.lockedGuessers = new Set();
 
   await prisma.round.create({

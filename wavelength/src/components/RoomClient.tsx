@@ -21,6 +21,7 @@ export function RoomClient({ code }: Props) {
   const draggingNeedleRef = useRef(false);
   const rafSendRef = useRef<number | null>(null);
   const pendingSendRef = useRef<number | null>(null);
+  const lastNeedleSeqRef = useRef(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /** Guesser: cover stays until peel finishes after guessing → reveal. */
@@ -45,6 +46,12 @@ export function RoomClient({ code }: Props) {
 
   useEffect(() => {
     if (state?.round?.teamNeedle !== undefined) {
+      if (typeof state.round.needleSeq === "number") {
+        lastNeedleSeqRef.current = Math.max(
+          lastNeedleSeqRef.current,
+          state.round.needleSeq,
+        );
+      }
       if (!draggingNeedleRef.current) setNeedle(state.round.teamNeedle);
     }
   }, [state?.round?.teamNeedle, state?.round?.id]);
@@ -63,10 +70,18 @@ export function RoomClient({ code }: Props) {
     s.on("room:state", (payload: RoomStatePayload) => {
       setState(payload);
       if (payload.round?.teamNeedle !== undefined) {
+        if (typeof payload.round.needleSeq === "number") {
+          lastNeedleSeqRef.current = Math.max(
+            lastNeedleSeqRef.current,
+            payload.round.needleSeq,
+          );
+        }
         if (!draggingNeedleRef.current) setNeedle(payload.round.teamNeedle);
       }
     });
-    s.on("room:needle", (p: { teamNeedle: number }) => {
+    s.on("room:needle", (p: { teamNeedle: number; needleSeq: number }) => {
+      if (p.needleSeq <= lastNeedleSeqRef.current) return;
+      lastNeedleSeqRef.current = p.needleSeq;
       if (!draggingNeedleRef.current) setNeedle(p.teamNeedle);
     });
     s.on("room:countdown_start", () => {

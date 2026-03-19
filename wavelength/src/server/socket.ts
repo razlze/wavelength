@@ -160,15 +160,16 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:needle_move", async (raw: unknown) => {
       const parsed = needleSchema.safeParse(raw);
       if (!parsed.success) return;
-      const { othersReset, countdownCancelled } = await setTeamNeedle(
+      const { othersReset, countdownCancelled, teamNeedle, needleSeq } =
+        await setTeamNeedle(
         roomId,
         playerId,
         parsed.data.position,
       );
-      const state = await buildRoomState(roomId, playerId);
-      if (!state?.round || state.round.status !== "guessing") return;
+      if (teamNeedle === null || needleSeq === null) return;
       io.to(`room:${room.code}`).emit("room:needle", {
-        teamNeedle: state.round.teamNeedle,
+        teamNeedle,
+        needleSeq,
       });
       if (countdownCancelled) {
         io.to(`room:${room.code}`).emit("room:countdown_cancel");
