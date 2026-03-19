@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Wavelength — party spectrum game",
-  description: "Create a room, share the code, guess where the target hides on the dial.",
+  title: "Brainwaves",
+  description:
+    "Create a room, share the code, guess where the target hides on the dial.",
 };
 
 export default function RootLayout({

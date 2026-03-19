@@ -18,6 +18,9 @@ export function RoomClient({ code }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [socket, setSocket] = useState<ReturnType<typeof io> | null>(null);
   const [needle, setNeedle] = useState(0.5);
+  const draggingNeedleRef = useRef(false);
+  const rafSendRef = useRef<number | null>(null);
+  const pendingSendRef = useRef<number | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /** Guesser: cover stays until peel finishes after guessing → reveal. */
@@ -42,7 +45,7 @@ export function RoomClient({ code }: Props) {
 
   useEffect(() => {
     if (state?.round?.teamNeedle !== undefined) {
-      setNeedle(state.round.teamNeedle);
+      if (!draggingNeedleRef.current) setNeedle(state.round.teamNeedle);
     }
   }, [state?.round?.teamNeedle, state?.round?.id]);
 
@@ -55,16 +58,16 @@ export function RoomClient({ code }: Props) {
     });
     s.on("connect", () => setErr(null));
     s.on("connect_error", () =>
-      setErr("Could not connect. Is the server running?"),
+      setErr("Could not connect. Please try again."),
     );
     s.on("room:state", (payload: RoomStatePayload) => {
       setState(payload);
       if (payload.round?.teamNeedle !== undefined) {
-        setNeedle(payload.round.teamNeedle);
+        if (!draggingNeedleRef.current) setNeedle(payload.round.teamNeedle);
       }
     });
     s.on("room:needle", (p: { teamNeedle: number }) => {
-      setNeedle(p.teamNeedle);
+      if (!draggingNeedleRef.current) setNeedle(p.teamNeedle);
     });
     s.on("room:countdown_start", () => {
       setCountdown(3);
@@ -97,6 +100,16 @@ export function RoomClient({ code }: Props) {
       setSocket(null);
     };
   }, [token]);
+
+  useEffect(() => {
+    return () => {
+      if (rafSendRef.current !== null) {
+        cancelAnimationFrame(rafSendRef.current);
+        rafSendRef.current = null;
+      }
+      pendingSendRef.current = null;
+    };
+  }, []);
 
   const createOrJoin = async (join: boolean) => {
     setErr(null);
@@ -406,9 +419,26 @@ export function RoomClient({ code }: Props) {
                 ? undefined
                 : (v) => {
                     setNeedle(v);
-                    socket?.emit("player:needle_move", { position: v });
+                    pendingSendRef.current = v;
+                    if (rafSendRef.current === null) {
+                      rafSendRef.current = requestAnimationFrame(() => {
+                        rafSendRef.current = null;
+                        const pos = pendingSendRef.current;
+                        pendingSendRef.current = null;
+                        if (pos !== null) {
+                          socket?.emit("player:needle_move", { position: pos });
+                        }
+                      });
+                    }
                   }
             }
+            onDragStateChange={(dragging) => {
+              draggingNeedleRef.current = dragging;
+              if (!dragging) {
+                const serverNeedle = round?.teamNeedle;
+                if (serverNeedle !== undefined) setNeedle(serverNeedle);
+              }
+            }}
             disabled={dialReveal || !iGuess || locked}
             leftLabel={round.theme.left}
             rightLabel={round.theme.right}

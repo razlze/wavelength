@@ -73,7 +73,7 @@ export default function Home() {
     <main className="flex min-h-screen flex-col items-center justify-center px-6 py-16">
       <div className="mb-10 text-center">
         <h1 className="text-4xl font-black tracking-tight text-[#11163A] sm:text-5xl">
-          Wavelength
+          Brainwaves
         </h1>
         <p className="mt-3 max-w-md text-sm text-gray-500">
           Read each other&apos;s minds. One psychic, one spectrum, one dial.
@@ -125,22 +125,6 @@ export default function Home() {
         {err && <p className="text-center text-sm text-red-500">{err}</p>}
       </div>
 
-      <p className="mt-10 max-w-sm text-center text-xs text-gray-400">
-        Run the app with{" "}
-        <code className="rounded bg-gray-100 px-1 text-gray-600">
-          npm run dev
-        </code>{" "}
-        (custom server + Socket.IO). Set{" "}
-        <code className="rounded bg-gray-100 px-1 text-gray-600">
-          DATABASE_URL
-        </code>{" "}
-        and{" "}
-        <code className="rounded bg-gray-100 px-1 text-gray-600">
-          JWT_SECRET
-        </code>{" "}
-        in{" "}
-        <code className="rounded bg-gray-100 px-1 text-gray-600">.env</code>.
-      </p>
     </main>
   );
 }

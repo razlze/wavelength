@@ -154,6 +154,8 @@ type DialProps = {
   locked?: boolean;
   /** Toggle lock state from the center button */
   onToggleLock?: () => void;
+  /** Notifies when the user is actively dragging the needle */
+  onDragStateChange?: (dragging: boolean) => void;
   /**
    * Optional teal cover over the playable area for guessers.
    * When true, a teal semi-circle sits over the cream background.
@@ -179,6 +181,7 @@ export function Dial({
   mode = "guess",
   locked = false,
   onToggleLock,
+  onDragStateChange,
   showCover = false,
   coverRevealing = false,
 }: DialProps) {
@@ -251,12 +254,21 @@ export function Dial({
         className="w-full max-w-[520px] touch-none select-none"
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
+          onDragStateChange?.(true);
           handlePointer(e.clientX, e.clientY, e.currentTarget);
         }}
         onPointerMove={(e) => {
           if (e.buttons !== 1 && e.pointerType === "mouse") return;
           if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
           handlePointer(e.clientX, e.clientY, e.currentTarget);
+        }}
+        onPointerUp={(e) => {
+          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+          onDragStateChange?.(false);
+        }}
+        onPointerCancel={(e) => {
+          if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+          onDragStateChange?.(false);
         }}
       >
         <defs>
