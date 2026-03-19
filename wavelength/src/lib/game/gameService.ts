@@ -17,6 +17,8 @@ function ensureRuntime(roomId: string): RoomRuntime {
       candidateSkipOffset: 0,
       teamNeedle: 0.5,
       needleSeq: 0,
+      needleDominionPlayerId: null,
+      needleDominionSeq: 0,
       lockedGuessers: new Set(),
       socketByPlayer: new Map(),
       countdownTimer: null,
@@ -177,6 +179,8 @@ export async function buildRoomState(
             : theme,
       teamNeedle: rt?.teamNeedle ?? 0.5,
       needleSeq: rt?.needleSeq ?? 0,
+      needleDominionPlayerId: rt?.needleDominionPlayerId ?? null,
+      needleDominionSeq: rt?.needleDominionSeq ?? 0,
       lockedIds,
       reveal:
         round.status === "revealed" || round.status === "complete"
@@ -245,6 +249,8 @@ export async function startGame(roomId: string, leaderId: string) {
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
   rt.needleSeq = 0;
+  rt.needleDominionPlayerId = null;
+  rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -298,6 +304,8 @@ async function abortActiveRoundAndStartNew(
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
   rt.needleSeq = 0;
+  rt.needleDominionPlayerId = null;
+  rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -375,6 +383,8 @@ export async function setTheme(
   const rt = ensureRuntime(roomId);
   rt.teamNeedle = 0.5;
   rt.needleSeq = 0;
+  rt.needleDominionPlayerId = null;
+  rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
 
@@ -432,6 +442,12 @@ export async function setTeamNeedle(
   if (round.psychicPlayerId === playerId) return none;
   const rt = ensureRuntime(roomId);
   if (rt.lockedGuessers.has(playerId)) return none;
+  if (rt.needleDominionPlayerId !== playerId) return none;
+
+  // Avoid spamming WebSocket broadcasts when the needle isn't actually moving.
+  const EPSILON = 1e-4;
+  if (Math.abs(rt.teamNeedle - clamp) < EPSILON) return none;
+
   rt.teamNeedle = clamp;
   rt.needleSeq += 1;
 
@@ -467,6 +483,11 @@ export async function lockGuess(
   }
   const rt = ensureRuntime(roomId);
   rt.lockedGuessers.add(playerId);
+  // If they lock while holding needle dominion, release control so others can move.
+  if (rt.needleDominionPlayerId === playerId) {
+    rt.needleDominionPlayerId = null;
+    rt.needleDominionSeq += 1;
+  }
 
   const guessers = round.room.players
     .filter((p) => p.id !== round.psychicPlayerId)
@@ -498,6 +519,79 @@ export async function unlockGuess(
   const wasCounting = rt.countdownTimer !== null;
   clearCountdown(rt);
   return { wasCounting };
+}
+
+export async function claimNeedle(
+  roomId: string,
+  playerId: string,
+): Promise<{
+  ok: boolean;
+  needleDominionPlayerId: string | null;
+  needleDominionSeq: number;
+}> {
+  const round = await prisma.round.findFirst({
+    where: { roomId },
+    orderBy: { roundNumber: "desc" },
+  });
+  if (!round || round.status !== "guessing") {
+    const rt = getRuntime(roomId);
+    return {
+      ok: false,
+      needleDominionPlayerId: rt?.needleDominionPlayerId ?? null,
+      needleDominionSeq: rt?.needleDominionSeq ?? 0,
+    };
+  }
+  if (round.psychicPlayerId === playerId) {
+    return { ok: false, needleDominionPlayerId: null, needleDominionSeq: 0 };
+  }
+
+  const rt = ensureRuntime(roomId);
+  if (rt.lockedGuessers.has(playerId)) {
+    return { ok: false, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
+  }
+
+  if (rt.needleDominionPlayerId && rt.needleDominionPlayerId !== playerId) {
+    return { ok: false, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
+  }
+
+  if (rt.needleDominionPlayerId === playerId) {
+    return { ok: true, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
+  }
+
+  rt.needleDominionPlayerId = playerId;
+  rt.needleDominionSeq += 1;
+  return { ok: true, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
+}
+
+export async function releaseNeedle(
+  roomId: string,
+  playerId: string,
+): Promise<{
+  ok: boolean;
+  needleDominionPlayerId: string | null;
+  needleDominionSeq: number;
+}> {
+  const round = await prisma.round.findFirst({
+    where: { roomId },
+    orderBy: { roundNumber: "desc" },
+  });
+  if (!round || round.status !== "guessing") {
+    const rt = getRuntime(roomId);
+    return {
+      ok: false,
+      needleDominionPlayerId: rt?.needleDominionPlayerId ?? null,
+      needleDominionSeq: rt?.needleDominionSeq ?? 0,
+    };
+  }
+
+  const rt = ensureRuntime(roomId);
+  if (rt.needleDominionPlayerId !== playerId) {
+    return { ok: false, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
+  }
+
+  rt.needleDominionPlayerId = null;
+  rt.needleDominionSeq += 1;
+  return { ok: true, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
 }
 
 export async function executeCountdownReveal(roomId: string) {
@@ -593,6 +687,8 @@ export async function leaderNextRound(roomId: string, leaderId: string) {
   rt.candidateSkipOffset = 0;
   rt.teamNeedle = 0.5;
   rt.needleSeq = 0;
+  rt.needleDominionPlayerId = null;
+  rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
 
   await prisma.round.create({
@@ -648,6 +744,10 @@ export async function leaveRoom(roomId: string, playerId: string) {
   if (rt) {
     rt.socketByPlayer.delete(playerId);
     rt.playerOrder = rt.playerOrder.filter((id) => id !== playerId);
+    if (rt.needleDominionPlayerId === playerId) {
+      rt.needleDominionPlayerId = null;
+      rt.needleDominionSeq += 1;
+    }
   }
 
   if (room.leaderPlayerId === playerId) {
@@ -687,7 +787,13 @@ export async function leaveRoom(roomId: string, playerId: string) {
 }
 
 export async function onSocketDisconnect(socketId: string) {
-  unregisterSocket(socketId);
+  const info = unregisterSocket(socketId);
+  if (!info) return;
+  const rt = getRuntime(info.roomId);
+  if (rt && rt.needleDominionPlayerId === info.playerId) {
+    rt.needleDominionPlayerId = null;
+    rt.needleDominionSeq += 1;
+  }
 }
 
 export function appendPlayerToRuntime(roomId: string, playerId: string) {

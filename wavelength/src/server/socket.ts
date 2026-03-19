@@ -2,6 +2,7 @@ import type { Server as IOServer, Socket } from "socket.io";
 import { prisma } from "@/lib/prisma";
 import { verifyPlayerToken } from "@/lib/tokens";
 import {
+  claimNeedle,
   buildRoomState,
   executeCountdownReveal,
   getRuntime,
@@ -16,12 +17,16 @@ import {
   seedThemePresetsIfEmpty,
   setTeamNeedle,
   setTheme,
+  releaseNeedle,
   startGame,
   unlockGuess,
 } from "@/lib/game/gameService";
 import { z } from "zod";
 
-const needleSchema = z.object({ position: z.number().min(0).max(1) });
+const needleSchema = z.object({
+  position: z.number().min(0).max(1),
+  playerId: z.string().min(1),
+});
 const themeSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("custom"),
@@ -31,6 +36,10 @@ const themeSchema = z.discriminatedUnion("kind", [
   }),
   z.object({ kind: z.literal("preset"), presetId: z.string().min(1) }),
 ]);
+
+const dominionSchema = z.object({
+  playerId: z.string().min(1),
+});
 
 async function broadcastRoom(io: IOServer, roomId: string) {
   const room = await prisma.room.findUnique({
@@ -160,6 +169,7 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:needle_move", async (raw: unknown) => {
       const parsed = needleSchema.safeParse(raw);
       if (!parsed.success) return;
+      if (parsed.data.playerId !== playerId) return;
       const { othersReset, countdownCancelled, teamNeedle, needleSeq } =
         await setTeamNeedle(
         roomId,
@@ -170,6 +180,7 @@ export function attachGameSockets(io: IOServer) {
       io.to(`room:${room.code}`).emit("room:needle", {
         teamNeedle,
         needleSeq,
+        needleDominionPlayerId: playerId,
       });
       if (countdownCancelled) {
         io.to(`room:${room.code}`).emit("room:countdown_cancel");
@@ -177,6 +188,30 @@ export function attachGameSockets(io: IOServer) {
       if (othersReset) {
         await broadcastRoom(io, roomId);
       }
+    });
+
+    socket.on("player:needle_claim", async (raw: unknown) => {
+      const parsed = dominionSchema.safeParse(raw);
+      if (!parsed.success) return;
+      if (parsed.data.playerId !== playerId) return;
+      const res = await claimNeedle(roomId, playerId);
+      if (!res.ok) return;
+      io.to(`room:${room.code}`).emit("room:needle_dominion", {
+        needleDominionPlayerId: res.needleDominionPlayerId,
+        needleDominionSeq: res.needleDominionSeq,
+      });
+    });
+
+    socket.on("player:needle_letgo", async (raw: unknown) => {
+      const parsed = dominionSchema.safeParse(raw);
+      if (!parsed.success) return;
+      if (parsed.data.playerId !== playerId) return;
+      const res = await releaseNeedle(roomId, playerId);
+      if (!res.ok) return;
+      io.to(`room:${room.code}`).emit("room:needle_dominion", {
+        needleDominionPlayerId: res.needleDominionPlayerId,
+        needleDominionSeq: res.needleDominionSeq,
+      });
     });
 
     socket.on("player:lock_guess", async () => {

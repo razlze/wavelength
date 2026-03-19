@@ -22,6 +22,12 @@ export function RoomClient({ code }: Props) {
   const rafSendRef = useRef<number | null>(null);
   const pendingSendRef = useRef<number | null>(null);
   const lastNeedleSeqRef = useRef(0);
+  const [needleDominionPlayerId, setNeedleDominionPlayerId] = useState<
+    string | null
+  >(null);
+  const needleDominionPlayerIdRef = useRef<string | null>(null);
+  const meIdRef = useRef<string | null>(null);
+  const lastNeedleDominionSeqRef = useRef(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /** Guesser: cover stays until peel finishes after guessing → reveal. */
@@ -45,16 +51,30 @@ export function RoomClient({ code }: Props) {
   }, [code]);
 
   useEffect(() => {
-    if (state?.round?.teamNeedle !== undefined) {
+    if (!state) return;
+    meIdRef.current = state.meId;
+    const domId = state.round?.needleDominionPlayerId ?? null;
+    if (needleDominionPlayerIdRef.current !== domId) {
+      needleDominionPlayerIdRef.current = domId;
+      setNeedleDominionPlayerId(domId);
+    }
+
+    if (state.round?.teamNeedle !== undefined) {
       if (typeof state.round.needleSeq === "number") {
         lastNeedleSeqRef.current = Math.max(
           lastNeedleSeqRef.current,
           state.round.needleSeq,
         );
       }
-      if (!draggingNeedleRef.current) setNeedle(state.round.teamNeedle);
+      const amDominionHolder = domId === state.meId;
+      if (!amDominionHolder) setNeedle(state.round.teamNeedle);
     }
-  }, [state?.round?.teamNeedle, state?.round?.id]);
+  }, [
+    state?.round?.teamNeedle,
+    state?.round?.id,
+    state?.round?.needleDominionPlayerId,
+    state?.meId,
+  ]);
 
   useEffect(() => {
     if (!token) return;
@@ -69,6 +89,12 @@ export function RoomClient({ code }: Props) {
     );
     s.on("room:state", (payload: RoomStatePayload) => {
       setState(payload);
+      meIdRef.current = payload.meId;
+      const domId = payload.round?.needleDominionPlayerId ?? null;
+      if (needleDominionPlayerIdRef.current !== domId) {
+        needleDominionPlayerIdRef.current = domId;
+        setNeedleDominionPlayerId(domId);
+      }
       if (payload.round?.teamNeedle !== undefined) {
         if (typeof payload.round.needleSeq === "number") {
           lastNeedleSeqRef.current = Math.max(
@@ -76,14 +102,32 @@ export function RoomClient({ code }: Props) {
             payload.round.needleSeq,
           );
         }
-        if (!draggingNeedleRef.current) setNeedle(payload.round.teamNeedle);
+        if (domId !== payload.meId) setNeedle(payload.round.teamNeedle);
       }
     });
-    s.on("room:needle", (p: { teamNeedle: number; needleSeq: number }) => {
+    s.on(
+      "room:needle_dominion",
+      (p: { needleDominionPlayerId: string | null; needleDominionSeq: number }) => {
+        if (p.needleDominionSeq <= lastNeedleDominionSeqRef.current) return;
+        lastNeedleDominionSeqRef.current = p.needleDominionSeq;
+        needleDominionPlayerIdRef.current = p.needleDominionPlayerId;
+        setNeedleDominionPlayerId(p.needleDominionPlayerId);
+      },
+    );
+    s.on(
+      "room:needle",
+      (p: {
+        teamNeedle: number;
+        needleSeq: number;
+        needleDominionPlayerId: string | null;
+      }) => {
       if (p.needleSeq <= lastNeedleSeqRef.current) return;
       lastNeedleSeqRef.current = p.needleSeq;
-      if (!draggingNeedleRef.current) setNeedle(p.teamNeedle);
-    });
+      // Ignore broadcasts while I'm the current dominion holder.
+      if (p.needleDominionPlayerId === meIdRef.current) return;
+      setNeedle(p.teamNeedle);
+      },
+    );
     s.on("room:countdown_start", () => {
       setCountdown(3);
       if (countdownRef.current) clearInterval(countdownRef.current);
@@ -218,6 +262,16 @@ export function RoomClient({ code }: Props) {
   const iGuess =
     round && !isPsychic && state ? guessers.some((g) => g.id === state.meId) : false;
   const locked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+  const needleDominionLocked =
+    needleDominionPlayerId !== null && state
+      ? needleDominionPlayerId !== state.meId
+      : false;
+  const dominionHolder = useMemo(() => {
+    if (!state?.round) return null;
+    if (!needleDominionPlayerId) return null;
+    if (!needleDominionLocked) return null; // other guessers only
+    return state.players.find((p) => p.id === needleDominionPlayerId) ?? null;
+  }, [needleDominionLocked, needleDominionPlayerId, state]);
 
   const toggleLock = useCallback(() => {
     if (!socket || !iGuess) return;
@@ -227,6 +281,24 @@ export function RoomClient({ code }: Props) {
       socket.emit("player:lock_guess");
     }
   }, [socket, iGuess, locked]);
+
+  const flushPendingNeedleMove = () => {
+    if (!socket) return;
+    const myId = meIdRef.current;
+    if (!myId) return;
+
+    // Ensure the last dragged position is sent before claiming release.
+    if (rafSendRef.current !== null) {
+      cancelAnimationFrame(rafSendRef.current);
+      rafSendRef.current = null;
+    }
+
+    const pos = pendingSendRef.current;
+    pendingSendRef.current = null;
+    if (pos !== null) {
+      socket.emit("player:needle_move", { position: pos, playerId: myId });
+    }
+  };
 
   const isLeader = me?.isLeader ?? false;
   const canStart =
@@ -441,20 +513,42 @@ export function RoomClient({ code }: Props) {
                         const pos = pendingSendRef.current;
                         pendingSendRef.current = null;
                         if (pos !== null) {
-                          socket?.emit("player:needle_move", { position: pos });
+                          const myId = meIdRef.current;
+                          if (myId) {
+                            socket?.emit("player:needle_move", {
+                              position: pos,
+                              playerId: myId,
+                            });
+                          }
                         }
                       });
                     }
                   }
             }
             onDragStateChange={(dragging) => {
-              draggingNeedleRef.current = dragging;
-              if (!dragging) {
-                const serverNeedle = round?.teamNeedle;
-                if (serverNeedle !== undefined) setNeedle(serverNeedle);
+              if (!socket || !iGuess || locked) return;
+              const myId = meIdRef.current;
+              if (!myId) return;
+
+              if (dragging) {
+                // Only allow claiming when no one else currently has dominion.
+                if (
+                  needleDominionPlayerId !== null &&
+                  needleDominionPlayerId !== myId
+                )
+                  return;
+                draggingNeedleRef.current = true;
+                socket.emit("player:needle_claim", { playerId: myId });
+                return;
               }
+
+              // Only release if we actually started a drag/claim.
+              if (!draggingNeedleRef.current) return;
+              draggingNeedleRef.current = false;
+              flushPendingNeedleMove();
+              socket.emit("player:needle_letgo", { playerId: myId });
             }}
-            disabled={dialReveal || !iGuess || locked}
+            disabled={dialReveal || !iGuess || locked || needleDominionLocked}
             leftLabel={round.theme.left}
             rightLabel={round.theme.right}
             showTarget={
@@ -462,6 +556,8 @@ export function RoomClient({ code }: Props) {
             }
             locked={locked}
             onToggleLock={!dialReveal && iGuess ? toggleLock : undefined}
+            fadedByDominion={needleDominionLocked}
+            dominionHolderName={dominionHolder?.nickname ?? null}
             showCover={
               iGuess &&
               !revealPeelDone &&

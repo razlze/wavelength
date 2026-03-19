@@ -157,6 +157,16 @@ type DialProps = {
   /** Notifies when the user is actively dragging the needle */
   onDragStateChange?: (dragging: boolean) => void;
   /**
+   * When another guesser has dominion, fade the solid needle + center button for this client.
+   * (Purely visual; interaction is controlled via `disabled`.)
+   */
+  fadedByDominion?: boolean;
+  /**
+   * Optional label (nickname) shown on the edge of the dial at the needle position.
+   * Intended to be shown only to non-dominion guessers while dominion is held.
+   */
+  dominionHolderName?: string | null;
+  /**
    * Optional teal cover over the playable area for guessers.
    * When true, a teal semi-circle sits over the cream background.
    */
@@ -182,9 +192,12 @@ export function Dial({
   locked = false,
   onToggleLock,
   onDragStateChange,
+  fadedByDominion = false,
+  dominionHolderName = null,
   showCover = false,
   coverRevealing = false,
 }: DialProps) {
+  const canDrag = mode === "guess" && !disabled && !!onChange;
   const angle = Math.PI * (1 - value);
   const nx = CX + R * Math.cos(angle);
   const ny = CY - R * Math.sin(angle);
@@ -219,6 +232,7 @@ export function Dial({
       (mode === "guess" && showCover));
   const showSolidNeedle = mode === "guess" || mode === "reveal";
   const showFadedNeedle = mode === "psychic" && teamAng !== null;
+  const faded = mode === "guess" && fadedByDominion && showSolidNeedle;
 
   const cr = 9;
   const rArcEndX = CX + Math.sqrt(R * R - cr * cr);
@@ -253,6 +267,7 @@ export function Dial({
         viewBox={`0 0 ${VB} ${VB_H}`}
         className="w-full max-w-[520px] touch-none select-none"
         onPointerDown={(e) => {
+          if (!canDrag) return;
           e.currentTarget.setPointerCapture(e.pointerId);
           onDragStateChange?.(true);
           handlePointer(e.clientX, e.clientY, e.currentTarget);
@@ -375,53 +390,76 @@ export function Dial({
 
         {/* Solid red needle (guesser / reveal) — on top of frame */}
         {showSolidNeedle && (
-          <>
-            <line
-              x1={CX}
-              y1={CY}
-              x2={nx}
-              y2={ny}
-              stroke={needleColor}
-              strokeWidth={7}
-              strokeLinecap="round"
-            />
-            {onToggleLock ? (
-              <g
-                style={{ cursor: "pointer" }}
-                onPointerDown={(e) => {
-                  e.stopPropagation();
-                  onToggleLock();
-                }}
-              >
-                <circle
-                  cx={CX}
-                  cy={CY}
-                  r={LOCK_R}
-                  fill={locked ? "#16a34a" : "#DC2626"}
-                />
-                {locked && (
-                  <svg
-                    x={CX - 12}
-                    y={CY - 12}
-                    width={24}
-                    height={24}
-                    viewBox="0 0 24 24"
-                    fill="none"
-                  >
-                    <path
-                      d="M4 12.6111L8.92308 17.5L20 6.5"
-                      stroke="white"
-                      strokeWidth={2.5}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                )}
-              </g>
-            ) : (
-              <circle cx={CX} cy={CY} r={LOCK_R} fill="#DC2626" />
-            )}
-          </>
+          <g style={{ opacity: faded ? 0.55 : 1 }}>
+            <>
+              <line
+                x1={CX}
+                y1={CY}
+                x2={nx}
+                y2={ny}
+                stroke={needleColor}
+                strokeWidth={7}
+                strokeLinecap="round"
+              />
+              {onToggleLock ? (
+                <g
+                  style={{ cursor: "pointer" }}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onToggleLock();
+                  }}
+                >
+                  <circle
+                    cx={CX}
+                    cy={CY}
+                    r={LOCK_R}
+                    fill={locked ? "#16a34a" : "#DC2626"}
+                  />
+                  {locked && (
+                    <svg
+                      x={CX - 12}
+                      y={CY - 12}
+                      width={24}
+                      height={24}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <path
+                        d="M4 12.6111L8.92308 17.5L20 6.5"
+                        stroke="white"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </g>
+              ) : (
+                <circle cx={CX} cy={CY} r={LOCK_R} fill="#DC2626" />
+              )}
+            </>
+          </g>
+        )}
+
+        {dominionHolderName && mode === "guess" && (
+          <text
+            x={CX + (R + 26) * Math.cos(angle)}
+            y={CY - (R + 26) * Math.sin(angle)}
+            fill="#E3DDD8"
+            stroke="#11163A"
+            strokeWidth={3}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeOpacity={0.9}
+            fontSize={14}
+            fontWeight={800}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            paintOrder="stroke"
+            pointerEvents="none"
+          >
+            {dominionHolderName}
+          </text>
         )}
 
         {/* Theme card — single rounded rect split into two halves */}

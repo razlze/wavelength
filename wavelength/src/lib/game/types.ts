@@ -31,6 +31,10 @@ export type RoomStatePayload = {
     teamNeedle: number;
     /** Monotonic sequence for teamNeedle updates (guards against reordering) */
     needleSeq: number;
+    /** If non-null, this player currently has exclusive control over the needle. */
+    needleDominionPlayerId: string | null;
+    /** Monotonic sequence for needleDominion updates (guards against reordering). */
+    needleDominionSeq: number;
     lockedIds: string[];
     /** After reveal */
     reveal?: {
@@ -51,6 +55,8 @@ export type RoomRuntime = {
   candidateSkipOffset: number;
   teamNeedle: number;
   needleSeq: number;
+  needleDominionPlayerId: string | null;
+  needleDominionSeq: number;
   lockedGuessers: Set<string>;
   socketByPlayer: Map<string, string>;
   countdownTimer: ReturnType<typeof setTimeout> | null;
