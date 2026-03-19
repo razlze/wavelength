@@ -217,18 +217,22 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:lock_guess", async () => {
       try {
         const { allLocked } = await lockGuess(roomId, playerId);
-        if (allLocked) {
-          const rt = getRuntime(roomId);
-          if (rt && rt.countdownTimer === null) {
-            io.to(`room:${room.code}`).emit("room:countdown_start");
-            rt.countdownTimer = setTimeout(async () => {
-              rt.countdownTimer = null;
-              await executeCountdownReveal(roomId);
-              await broadcastRoom(io, roomId);
-            }, 3500);
-          }
-        }
+        const rt = getRuntime(roomId);
+        const shouldStartCountdown =
+          allLocked && rt !== undefined && rt.countdownTimer === null;
+
+        // Ensure clients receive the updated `lockedIds` (dial turns green)
+        // before the countdown starts.
         await broadcastRoom(io, roomId);
+
+        if (shouldStartCountdown) {
+          io.to(`room:${room.code}`).emit("room:countdown_start");
+          rt!.countdownTimer = setTimeout(async () => {
+            rt!.countdownTimer = null;
+            await executeCountdownReveal(roomId);
+            await broadcastRoom(io, roomId);
+          }, 3500);
+        }
       } catch (e) {
         socket.emit("error:msg", {
           message: e instanceof Error ? e.message : "Error",
@@ -239,10 +243,10 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:unlock_guess", async () => {
       try {
         const { wasCounting } = await unlockGuess(roomId, playerId);
+        await broadcastRoom(io, roomId);
         if (wasCounting) {
           io.to(`room:${room.code}`).emit("room:countdown_cancel");
         }
-        await broadcastRoom(io, roomId);
       } catch (e) {
         socket.emit("error:msg", {
           message: e instanceof Error ? e.message : "Error",

@@ -34,6 +34,13 @@ export function RoomClient({ code }: Props) {
   const [revealPeelDone, setRevealPeelDone] = useState(false);
   const [revealCoverPeeling, setRevealCoverPeeling] = useState(false);
   const prevRoundStatusRef = useRef<string | null>(null);
+  // Optimistic UX for the center "lock" button:
+  // immediately reflect lock/unlock locally while waiting for the server `room:state`.
+  const [optimisticLocked, setOptimisticLocked] = useState<boolean | null>(null);
+  const [lockRequestInFlight, setLockRequestInFlight] = useState(false);
+  const lockRequestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useEffect(() => {
     const raw =
@@ -199,6 +206,12 @@ export function RoomClient({ code }: Props) {
   useEffect(() => {
     setRevealPeelDone(false);
     setRevealCoverPeeling(false);
+    setOptimisticLocked(null);
+    setLockRequestInFlight(false);
+    if (lockRequestTimeoutRef.current) {
+      clearTimeout(lockRequestTimeoutRef.current);
+      lockRequestTimeoutRef.current = null;
+    }
   }, [state?.round?.id]);
 
   useEffect(() => {
@@ -261,11 +274,50 @@ export function RoomClient({ code }: Props) {
     : (state?.players ?? []);
   const iGuess =
     round && !isPsychic && state ? guessers.some((g) => g.id === state.meId) : false;
-  const locked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+  const serverLocked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+  const locked = optimisticLocked ?? serverLocked;
   const needleDominionLocked =
     needleDominionPlayerId !== null && state
       ? needleDominionPlayerId !== state.meId
       : false;
+
+  // Reconcile optimistic UI with server truth as soon as the server updates.
+  useEffect(() => {
+    // If the server and optimistic already match, we can just clear the override.
+    // If they don't match, clearing makes the UI converge to server state.
+    if (optimisticLocked !== null && optimisticLocked !== serverLocked) {
+      setOptimisticLocked(null);
+      return;
+    }
+    if (optimisticLocked !== null && optimisticLocked === serverLocked) {
+      // Clear so future toggles use server value until next optimistic interaction.
+      setOptimisticLocked(null);
+    }
+  }, [serverLocked]);
+
+  // Clear in-flight guard once we see the server lock state change.
+  useEffect(() => {
+    if (!lockRequestInFlight) return;
+    // If serverLocked changed, we can safely re-enable input.
+    setLockRequestInFlight(false);
+  }, [serverLocked]);
+
+  useEffect(() => {
+    if (!lockRequestInFlight) return;
+    // Safety net: if something goes wrong and the server never updates,
+    // don't permanently disable the button.
+    lockRequestTimeoutRef.current = setTimeout(() => {
+      setLockRequestInFlight(false);
+      lockRequestTimeoutRef.current = null;
+      setOptimisticLocked(null);
+    }, 6000);
+    return () => {
+      if (lockRequestTimeoutRef.current) {
+        clearTimeout(lockRequestTimeoutRef.current);
+        lockRequestTimeoutRef.current = null;
+      }
+    };
+  }, [lockRequestInFlight]);
   const dominionHolder = useMemo(() => {
     if (!state?.round) return null;
     if (!needleDominionPlayerId) return null;
@@ -275,12 +327,16 @@ export function RoomClient({ code }: Props) {
 
   const toggleLock = useCallback(() => {
     if (!socket || !iGuess) return;
+    if (lockRequestInFlight) return;
+    // Optimistically update the UI so the dial turns green immediately.
+    setOptimisticLocked(!locked);
+    setLockRequestInFlight(true);
     if (locked) {
       socket.emit("player:unlock_guess");
     } else {
       socket.emit("player:lock_guess");
     }
-  }, [socket, iGuess, locked]);
+  }, [socket, iGuess, locked, lockRequestInFlight]);
 
   const flushPendingNeedleMove = () => {
     if (!socket) return;
