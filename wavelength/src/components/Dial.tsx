@@ -185,6 +185,8 @@ type DialProps = {
 };
 
 const LOCK_R = 24;
+const LOCK_BTN_INNER_R = LOCK_R * 0.62;
+const LOCK_BTN_HILITE_R = LOCK_R * 0.38;
 
 export function Dial({
   value,
@@ -207,6 +209,7 @@ export function Dial({
   const [dominionTextWidth, setDominionTextWidth] = useState<number | null>(
     null,
   );
+  const [lockButtonHovered, setLockButtonHovered] = useState(false);
 
   const canDrag = mode === "guess" && !disabled && !!onChange;
   const angle = Math.PI * (1 - value);
@@ -336,6 +339,21 @@ export function Dial({
 
   const needleColor =
     mode === "reveal" ? "#DC2626" : locked ? "#16a34a" : "#DC2626";
+
+  const lockOuterFill = locked ? "#16a34a" : "#DC2626";
+  const lockOuterStroke = lockButtonHovered
+    ? "rgba(227,221,216,0.95)"
+    : "rgba(227,221,216,0.25)";
+  const lockOuterStrokeWidth = lockButtonHovered ? 2.75 : 2.25;
+
+  const lockInnerFill = locked ? "#22c55e" : "#ef4444";
+  const lockInnerStroke = locked
+    ? lockButtonHovered
+      ? "#86efac"
+      : "rgba(16,185,129,0.85)"
+    : lockButtonHovered
+      ? "#fecaca"
+      : "rgba(239,68,68,0.85)";
 
   return (
     <div className="flex w-full flex-col items-center">
@@ -479,19 +497,85 @@ export function Dial({
               />
               {onToggleLock ? (
                 <g
-                  style={{ cursor: "pointer" }}
+                  style={{
+                    cursor: "pointer",
+                    // Smooth hover feedback for the center "confirm" button,
+                    // without moving/scaling the button.
+                    transition:
+                      "filter 180ms cubic-bezier(0.33, 1, 0.68, 1)",
+                    filter: lockButtonHovered
+                      ? "drop-shadow(0 0 10px rgba(255,255,255,0.22))"
+                      : "drop-shadow(0 0 0px rgba(0,0,0,0))",
+                  }}
+                  onPointerEnter={() => setLockButtonHovered(true)}
+                  onPointerLeave={() => setLockButtonHovered(false)}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     onToggleLock();
                   }}
                 >
+                  <title>
+                    {locked ? "Cancel confirmation" : "Confirm guess"}
+                  </title>
                   <circle
                     cx={CX}
                     cy={CY}
                     r={LOCK_R}
-                    fill={locked ? "#16a34a" : "#DC2626"}
+                    style={{
+                      transition:
+                        "fill 180ms cubic-bezier(0.33, 1, 0.68, 1), stroke 180ms cubic-bezier(0.33, 1, 0.68, 1), stroke-width 180ms cubic-bezier(0.33, 1, 0.68, 1)",
+                    }}
+                    fill={lockOuterFill}
+                    stroke={lockOuterStroke}
+                    strokeWidth={lockOuterStrokeWidth}
                   />
-                  {locked && (
+                  {/* Inner layer: makes the center feel like a tangible button */}
+                  <circle
+                    cx={CX}
+                    cy={CY}
+                    r={LOCK_BTN_INNER_R}
+                    style={{
+                      transition:
+                        "fill 180ms cubic-bezier(0.33, 1, 0.68, 1), stroke 180ms cubic-bezier(0.33, 1, 0.68, 1)",
+                    }}
+                    fill={lockInnerFill}
+                    stroke={lockInnerStroke}
+                    strokeWidth={1.6}
+                  />
+                  {/* Small highlight dot for extra button affordance */}
+                  <circle
+                    cx={CX}
+                    cy={CY - LOCK_R * 0.18}
+                    r={LOCK_BTN_HILITE_R}
+                    style={{
+                      transition:
+                        "fill 180ms cubic-bezier(0.33, 1, 0.68, 1), opacity 180ms cubic-bezier(0.33, 1, 0.68, 1)",
+                    }}
+                    fill={
+                      locked
+                        ? "rgba(16,185,129,0.22)"
+                        : "rgba(255,255,255,0.14)"
+                    }
+                    opacity={0.95}
+                  />
+                  {locked ? (
+                    <svg
+                      x={CX - 12}
+                      y={CY - 12}
+                      width={24}
+                      height={24}
+                      viewBox="0 0 24 24"
+                      fill="none"
+                    >
+                      <path
+                        d="M6 6L18 18M18 6L6 18"
+                        stroke="white"
+                        strokeWidth={2.5}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  ) : (
                     <svg
                       x={CX - 12}
                       y={CY - 12}
@@ -506,6 +590,7 @@ export function Dial({
                         strokeWidth={2.5}
                         strokeLinecap="round"
                         strokeLinejoin="round"
+                        opacity={lockButtonHovered ? 1 : 0.92}
                       />
                     </svg>
                   )}

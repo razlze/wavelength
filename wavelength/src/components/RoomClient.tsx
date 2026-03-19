@@ -573,12 +573,12 @@ export function RoomClient({ code }: Props) {
           )}
           {!dialReveal && iGuess && !locked && (
             <p className="text-center text-sm text-gray-400">
-              Tap the center to approve
+              Tap the center to confirm your guess
             </p>
           )}
           {!dialReveal && iGuess && locked && countdown === null && (
             <p className="text-center text-sm text-emerald-600">
-              Approved! Waiting for others…
+              Confirmed! Tap again to cancel
             </p>
           )}
           {!dialReveal && countdown !== null && (
