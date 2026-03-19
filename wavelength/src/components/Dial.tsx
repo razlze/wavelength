@@ -1,5 +1,7 @@
 "use client";
 
+import { useLayoutEffect, useRef, useState } from "react";
+
 const VB = 400;
 const VB_H = 472;
 const CX = VB / 2;
@@ -51,6 +53,10 @@ function pickCardColors(left: string, right: string): [string, string] {
 
 function clamp01(t: number) {
   return Math.max(0, Math.min(1, t));
+}
+
+function clamp(t: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, t));
 }
 
 function sectorPath(from: number, to: number) {
@@ -197,6 +203,11 @@ export function Dial({
   showCover = false,
   coverRevealing = false,
 }: DialProps) {
+  const dominionTextRef = useRef<SVGTextElement | null>(null);
+  const [dominionTextWidth, setDominionTextWidth] = useState<number | null>(
+    null,
+  );
+
   const canDrag = mode === "guess" && !disabled && !!onChange;
   const angle = Math.PI * (1 - value);
   const nx = CX + R * Math.cos(angle);
@@ -233,6 +244,71 @@ export function Dial({
   const showSolidNeedle = mode === "guess" || mode === "reveal";
   const showFadedNeedle = mode === "psychic" && teamAng !== null;
   const faded = mode === "guess" && fadedByDominion && showSolidNeedle;
+  const dominionLabelRadius = R + 14;
+  // For psychic we want the label to track the *team needle* (movement),
+  // not the psychic target position.
+  const dominionLabelValue =
+    mode === "psychic" && teamNeedle !== undefined ? teamNeedle : value;
+  const dominionLabelAngle = Math.PI * (1 - dominionLabelValue);
+
+  const dominionLabelFontSize = 11;
+  const dominionLabelHalfWidthEstimate =
+    (dominionHolderName ? dominionHolderName.length : 0) *
+    dominionLabelFontSize *
+    0.45;
+
+  // Measure rendered text width for a tighter pill (SVG doesn't provide easy
+  // text metrics otherwise).
+  useLayoutEffect(() => {
+    if (!dominionHolderName) {
+      // Avoid synchronous setState in an effect.
+      requestAnimationFrame(() => setDominionTextWidth(null));
+      return;
+    }
+    const el = dominionTextRef.current;
+    if (!el) return;
+    try {
+      const measure = () => {
+        const { width } = el.getBBox();
+        if (Number.isFinite(width) && width > 0) {
+          setDominionTextWidth(width);
+        }
+      };
+      // Wait a tick to ensure the text is in the DOM.
+      requestAnimationFrame(measure);
+    } catch {
+      // Keep the fallback estimate.
+    }
+  }, [dominionHolderName, dominionLabelFontSize]);
+
+  const effectiveHalfTextWidth =
+    dominionTextWidth !== null
+      ? dominionTextWidth / 2
+      : dominionLabelHalfWidthEstimate;
+
+  // Almost tight like the player pills: small padding beyond the text.
+  const dominionPillPaddingX = 8;
+  const dominionPillPaddingY = 4;
+  const dominionPillHalfWidth = effectiveHalfTextWidth + dominionPillPaddingX;
+  const dominionPillHeight =
+    dominionLabelFontSize * 1.35 + dominionPillPaddingY;
+  const dominionPillHalfHeight = dominionPillHeight / 2;
+
+  const xMin = 12 + dominionPillHalfWidth;
+  const xMax = VB - 12 - dominionPillHalfWidth;
+  const yMin = 14 + dominionPillHalfHeight;
+  const yMax = VB_H - 14 - dominionPillHalfHeight;
+
+  const dominionLabelX = clamp(
+    CX + dominionLabelRadius * Math.cos(dominionLabelAngle),
+    xMin,
+    xMax,
+  );
+  const dominionLabelY = clamp(
+    CY - dominionLabelRadius * Math.sin(dominionLabelAngle),
+    yMin,
+    yMax,
+  );
 
   const cr = 9;
   const rArcEndX = CX + Math.sqrt(R * R - cr * cr);
@@ -441,25 +517,31 @@ export function Dial({
           </g>
         )}
 
-        {dominionHolderName && mode === "guess" && (
-          <text
-            x={CX + (R + 26) * Math.cos(angle)}
-            y={CY - (R + 26) * Math.sin(angle)}
-            fill="#E3DDD8"
-            stroke="#11163A"
-            strokeWidth={3}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeOpacity={0.9}
-            fontSize={14}
-            fontWeight={800}
-            textAnchor="middle"
-            dominantBaseline="middle"
-            paintOrder="stroke"
-            pointerEvents="none"
-          >
-            {dominionHolderName}
-          </text>
+        {dominionHolderName && (mode === "guess" || mode === "psychic") && (
+          <g pointerEvents="none">
+            <rect
+              x={dominionLabelX - dominionPillHalfWidth}
+              y={dominionLabelY - dominionPillHalfHeight}
+              width={dominionPillHalfWidth * 2}
+              height={dominionPillHalfHeight * 2}
+              rx={dominionPillHalfHeight}
+              fill="#11163A"
+              fillOpacity={0.5}
+            />
+            <text
+              ref={dominionTextRef}
+              x={dominionLabelX}
+              y={dominionLabelY}
+              fill="#E3DDD8"
+              fillOpacity={1}
+              fontSize={dominionLabelFontSize}
+              fontWeight={650}
+              textAnchor="middle"
+              dominantBaseline="middle"
+            >
+              {dominionHolderName}
+            </text>
+          </g>
         )}
 
         {/* Theme card — single rounded rect split into two halves */}
