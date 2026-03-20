@@ -24,6 +24,7 @@ export function RoomClient({ code }: Props) {
   const lastNeedlePosRef = useRef<number | null>(null);
   const lastRoomStateSeqRef = useRef(0);
   const lastNeedleSeqRef = useRef(0);
+  const lastLockSeqRef = useRef(0);
   const currentRoundIdRef = useRef<string | null>(null);
   const [needleDominionPlayerId, setNeedleDominionPlayerId] = useState<
     string | null
@@ -72,10 +73,7 @@ export function RoomClient({ code }: Props) {
 
     if (state.round?.teamNeedle !== undefined) {
       if (typeof state.round.needleSeq === "number") {
-        lastNeedleSeqRef.current = Math.max(
-          lastNeedleSeqRef.current,
-          state.round.needleSeq,
-        );
+        lastNeedleSeqRef.current = state.round.needleSeq;
       }
       const amDominionHolder = domId === state.meId;
       if (!amDominionHolder) setNeedle(state.round.teamNeedle);
@@ -102,8 +100,17 @@ export function RoomClient({ code }: Props) {
     s.on("room:state", (payload: RoomStatePayload) => {
       if (payload.roomStateSeq <= lastRoomStateSeqRef.current) return;
       lastRoomStateSeqRef.current = payload.roomStateSeq;
+      const prevRoundId = currentRoundIdRef.current;
+      const nextRoundId = payload.round?.id ?? null;
+      // Reset per-round monotonic guards immediately on round transitions.
+      // Doing this here avoids races with async effects after setState.
+      if (prevRoundId !== nextRoundId) {
+        lastNeedleSeqRef.current = 0;
+        lastLockSeqRef.current = 0;
+        lastNeedleDominionSeqRef.current = 0;
+      }
       setState(payload);
-      currentRoundIdRef.current = payload.round?.id ?? null;
+      currentRoundIdRef.current = nextRoundId;
       meIdRef.current = payload.meId;
       const domId = payload.round?.needleDominionPlayerId ?? null;
       if (needleDominionPlayerIdRef.current !== domId) {
@@ -112,10 +119,7 @@ export function RoomClient({ code }: Props) {
       }
       if (payload.round?.teamNeedle !== undefined) {
         if (typeof payload.round.needleSeq === "number") {
-          lastNeedleSeqRef.current = Math.max(
-            lastNeedleSeqRef.current,
-            payload.round.needleSeq,
-          );
+          lastNeedleSeqRef.current = payload.round.needleSeq;
         }
         if (domId !== payload.meId) setNeedle(payload.round.teamNeedle);
       }
@@ -137,14 +141,33 @@ export function RoomClient({ code }: Props) {
         needleDominionPlayerId: string | null;
         roundId: string;
       }) => {
-        if (p.needleSeq <= lastNeedleSeqRef.current) return;
         const currentRoundId = currentRoundIdRef.current;
         // Ignore delayed needle packets from previous rounds.
         if (currentRoundId && p.roundId !== currentRoundId) return;
+        if (p.needleSeq <= lastNeedleSeqRef.current) return;
         lastNeedleSeqRef.current = p.needleSeq;
         // Ignore broadcasts while I'm the current dominion holder.
         if (p.needleDominionPlayerId === meIdRef.current) return;
         setNeedle(p.teamNeedle);
+      },
+    );
+    s.on(
+      "room:locks_updated",
+      (p: { lockedIds: string[]; roundId: string; lockSeq: number }) => {
+        const currentRoundId = currentRoundIdRef.current;
+        if (currentRoundId && p.roundId !== currentRoundId) return;
+        if (p.lockSeq <= lastLockSeqRef.current) return;
+        lastLockSeqRef.current = p.lockSeq;
+        setState((prev) => {
+          if (!prev?.round || prev.round.id !== p.roundId) return prev;
+          return {
+            ...prev,
+            round: {
+              ...prev.round,
+              lockedIds: p.lockedIds,
+            },
+          };
+        });
       },
     );
     s.on("room:countdown_start", () => {
@@ -238,6 +261,7 @@ export function RoomClient({ code }: Props) {
     // Reset our local monotonic guards too, otherwise we would incorrectly
     // ignore all subsequent `room:needle` updates after the first round.
     lastNeedleSeqRef.current = 0;
+    lastLockSeqRef.current = 0;
     lastNeedleDominionSeqRef.current = 0;
     currentRoundIdRef.current = state?.round?.id ?? null;
     lastNeedlePosRef.current = null;

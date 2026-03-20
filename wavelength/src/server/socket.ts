@@ -203,6 +203,12 @@ export function attachGameSockets(io: IOServer) {
         io.to(`room:${room.code}`).emit("room:countdown_cancel");
       }
       if (othersReset) {
+        const rt = getRuntime(roomId);
+        io.to(`room:${room.code}`).emit("room:locks_updated", {
+          lockedIds: Array.from(rt?.lockedGuessers ?? []),
+          roundId,
+          lockSeq: needleSeq,
+        });
         await broadcastRoom(io, roomId);
       }
     });
@@ -247,6 +253,12 @@ export function attachGameSockets(io: IOServer) {
             io.to(`room:${room.code}`).emit("room:countdown_cancel");
           }
           if (othersReset) {
+            const rt = getRuntime(roomId);
+            io.to(`room:${room.code}`).emit("room:locks_updated", {
+              lockedIds: Array.from(rt?.lockedGuessers ?? []),
+              roundId,
+              lockSeq: needleSeq,
+            });
             await broadcastRoom(io, roomId);
           }
         }

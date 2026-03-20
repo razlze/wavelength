@@ -266,6 +266,7 @@ Correctness:
   - `teamNeedle` and `needleSeq` update.
   - Locks are invalidated only for currently-online locked guessers:
     - The lock set is partially cleared based on `socketByPlayer.has(id)`.
+    - Server emits `room:locks_updated` immediately so lock/unlock UI updates are not delayed behind full `room:state` fan-out.
   - Countdown cancellation happens only if the needle movement is meaningful.
 
 ### 6.3.3 Stale Needle Packets (Cross-Round)
@@ -416,6 +417,7 @@ The following broadcasts are emitted:
 - `room:closed`
 - `room:needle_dominion` (includes `needleDominionSeq`)
 - `room:needle` (includes `needleSeq` and `roundId`)
+- `room:locks_updated` (includes `lockedIds`, `lockSeq`, and `roundId`)
 - `room:countdown_start`
 - `room:countdown_cancel`
 
@@ -423,6 +425,7 @@ Client monotonic guards:
 - Ignore stale `room:state` using `roomStateSeq`.
 - Ignore stale needle packets using `needleSeq`.
 - Ignore cross-round needle packets using `roundId`.
+- For `room:locks_updated`, ignore mismatched `roundId` and stale `lockSeq`.
 
 ## 8. Correctness Invariants (Core Philosophy)
 This section captures the “philosophy” we’ve been applying:
@@ -442,6 +445,8 @@ Reveal is DB-idempotent via conditional `Round.status` transition.
 ## 8.4 Monotonic sequencing for out-of-order packet tolerance
 - `room:state` uses monotonic `roomStateSeq`.
 - `room:needle` uses monotonic `needleSeq`.
+- `room:locks_updated` uses monotonic `lockSeq`.
+- On round transition (`roundId` change), client resets per-round sequence guards (`needleSeq`, `lockSeq`, `needleDominionSeq`) immediately in the socket handler to avoid dropping valid early packets from the new round.
 
 ## 8.5 Away/disconnect semantics are explicit and consistent
 - Disconnect does not require re-confirmation for lock purposes for players who were already online and locked at countdown start; however, countdown eligibility and scoring depend on being online at countdown start.
@@ -499,6 +504,8 @@ Recommended unit test targets:
 - Stale packet guards:
   - ensure `room:needle` includes `roundId`
   - ensure client ignores mismatched roundId
+  - ensure `room:locks_updated` includes `roundId` + `lockSeq`
+  - ensure round transitions reset local per-round sequence guards before processing new-round packets
 
 ## 10.2 Integration Tests (Socket.IO + DB)
 Recommended scenarios:
