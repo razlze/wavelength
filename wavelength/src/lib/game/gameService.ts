@@ -21,6 +21,7 @@ function ensureRuntime(roomId: string): RoomRuntime {
       needleDominionSeq: 0,
       lockedGuessers: new Set(),
       socketByPlayer: new Map(),
+      roomStateSeq: 0,
       countdownTimer: null,
     };
     runtimes.set(roomId, r);
@@ -88,6 +89,7 @@ function currentPsychicCandidateId(rt: RoomRuntime): string | null {
 export async function buildRoomState(
   roomId: string,
   meId: string,
+  roomStateSeq: number,
 ): Promise<RoomStatePayload | null> {
   const room = await prisma.room.findUnique({
     where: { id: roomId },
@@ -150,9 +152,6 @@ export async function buildRoomState(
       }
     }
 
-    const guesserIds = room.players
-      .filter((p) => p.id !== round.psychicPlayerId)
-      .map((p) => p.id);
     const lockedIds =
       round.status === "guessing" || round.status === "psychic_setting_theme"
         ? Array.from(rt?.lockedGuessers ?? [])
@@ -194,6 +193,7 @@ export async function buildRoomState(
   }
 
   return {
+    roomStateSeq,
     room: { id: room.id, code: room.code, status: room.status },
     players,
     meId,
@@ -212,6 +212,12 @@ export function registerSocket(
   rt.socketByPlayer.set(playerId, socketId);
 }
 
+export function nextRoomStateSeq(roomId: string): number {
+  const rt = ensureRuntime(roomId);
+  rt.roomStateSeq += 1;
+  return rt.roomStateSeq;
+}
+
 export function unregisterSocket(socketId: string): {
   roomId: string;
   playerId: string;
@@ -228,21 +234,51 @@ export function unregisterSocket(socketId: string): {
 }
 
 export async function startGame(roomId: string, leaderId: string) {
-  const room = await prisma.room.findUnique({
-    where: { id: roomId },
-    include: { players: { where: activePlayersWhere() } },
-  });
-  if (!room || room.leaderPlayerId !== leaderId) {
-    throw new Error("Only the leader can start the game");
-  }
-  if (room.players.length < 2) {
-    throw new Error("Need at least two players");
-  }
-  if (room.status !== "lobby") {
-    throw new Error("Game already started");
-  }
+  const activePlayers = await prisma.$transaction(async (tx) => {
+    const room = await tx.room.findUnique({
+      where: { id: roomId },
+      select: {
+        id: true,
+        leaderPlayerId: true,
+        status: true,
+      },
+    });
+    if (!room || room.leaderPlayerId !== leaderId) {
+      throw new Error("Only the leader can start the game");
+    }
+    if (room.status !== "lobby") {
+      throw new Error("Game already started");
+    }
 
-  const ids = room.players.map((p) => p.id);
+    const players = await tx.player.findMany({
+      where: { roomId, ...activePlayersWhere() },
+      orderBy: { joinedAt: "asc" },
+      select: { id: true },
+    });
+    if (players.length < 2) {
+      throw new Error("Need at least two players");
+    }
+
+    const moved = await tx.room.updateMany({
+      where: { id: roomId, leaderPlayerId: leaderId, status: "lobby" },
+      data: { status: "in_round" },
+    });
+    if (moved.count !== 1) {
+      throw new Error("Game already started");
+    }
+
+    await tx.round.create({
+      data: {
+        roomId,
+        roundNumber: 1,
+        status: "selecting_psychic",
+      },
+    });
+
+    return players;
+  });
+
+  const ids = activePlayers.map((p) => p.id);
   const rt = ensureRuntime(roomId);
   rt.playerOrder = shuffle(ids);
   rt.psychicBaseIndex = Math.floor(Math.random() * rt.playerOrder.length);
@@ -253,20 +289,6 @@ export async function startGame(roomId: string, leaderId: string) {
   rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
-
-  await prisma.$transaction([
-    prisma.room.update({
-      where: { id: roomId },
-      data: { status: "in_round" },
-    }),
-    prisma.round.create({
-      data: {
-        roomId,
-        roundNumber: 1,
-        status: "selecting_psychic",
-      },
-    }),
-  ]);
 }
 
 async function abortActiveRoundAndStartNew(
@@ -332,14 +354,18 @@ export async function psychicAccept(roomId: string, playerId: string) {
   if (!round || round.status !== "selecting_psychic") {
     throw new Error("Invalid round phase");
   }
-  await prisma.round.update({
-    where: { id: round.id },
+
+  const updated = await prisma.round.updateMany({
+    where: { id: round.id, status: "selecting_psychic" },
     data: {
       psychicPlayerId: playerId,
       status: "psychic_setting_theme",
       targetPosition: Math.random(),
     },
   });
+  if (updated.count !== 1) {
+    throw new Error("Invalid round phase");
+  }
 }
 
 export async function psychicSkip(roomId: string, playerId: string) {
@@ -389,8 +415,12 @@ export async function setTheme(
   clearCountdown(rt);
 
   if (theme.kind === "custom") {
-    await prisma.round.update({
-      where: { id: round.id },
+    const updated = await prisma.round.updateMany({
+      where: {
+        id: round.id,
+        status: "psychic_setting_theme",
+        psychicPlayerId: playerId,
+      },
       data: {
         themeCustom: JSON.stringify({
           left: theme.left.slice(0, 28),
@@ -401,19 +431,29 @@ export async function setTheme(
         status: "guessing",
       },
     });
+    if (updated.count !== 1) {
+      throw new Error("Wrong phase for theme");
+    }
   } else {
     const preset = await prisma.themePreset.findUnique({
       where: { id: theme.presetId },
     });
     if (!preset) throw new Error("Invalid preset");
-    await prisma.round.update({
-      where: { id: round.id },
+    const updated = await prisma.round.updateMany({
+      where: {
+        id: round.id,
+        status: "psychic_setting_theme",
+        psychicPlayerId: playerId,
+      },
       data: {
         themePresetId: preset.id,
         themeCustom: null,
         status: "guessing",
       },
     });
+    if (updated.count !== 1) {
+      throw new Error("Wrong phase for theme");
+    }
   }
 }
 
@@ -421,17 +461,20 @@ export async function setTeamNeedle(
   roomId: string,
   playerId: string,
   position: number,
+  opts?: { force?: boolean },
 ): Promise<{
   othersReset: boolean;
   countdownCancelled: boolean;
   teamNeedle: number | null;
   needleSeq: number | null;
+  roundId: string | null;
 }> {
   const none = {
     othersReset: false,
     countdownCancelled: false,
     teamNeedle: null,
     needleSeq: null,
+    roundId: null,
   };
   const clamp = Math.max(0, Math.min(1, position));
   const round = await prisma.round.findFirst({
@@ -446,21 +489,36 @@ export async function setTeamNeedle(
 
   // Avoid spamming WebSocket broadcasts when the needle isn't actually moving.
   const EPSILON = 1e-4;
-  if (Math.abs(rt.teamNeedle - clamp) < EPSILON) return none;
+  const delta = Math.abs(rt.teamNeedle - clamp);
+  const meaningfulMove = delta >= EPSILON;
+  if (!opts?.force && !meaningfulMove) return none;
 
   rt.teamNeedle = clamp;
   rt.needleSeq += 1;
 
-  const othersReset = rt.lockedGuessers.size > 0;
-  if (othersReset) rt.lockedGuessers.clear();
-  const countdownCancelled = rt.countdownTimer !== null;
+  // If the needle moves, online locked guessers need to re-confirm.
+  // "Away"/disconnected players should remain locked for the round so they
+  // still get points when they reconnect.
+  const idsToClear: string[] = [];
+  if (meaningfulMove) {
+    for (const id of rt.lockedGuessers) {
+      if (rt.socketByPlayer.has(id)) {
+        idsToClear.push(id);
+      }
+    }
+  }
+  const onlineLockedGuessers = idsToClear.length > 0;
+  for (const id of idsToClear) rt.lockedGuessers.delete(id);
+
+  const countdownCancelled = meaningfulMove && rt.countdownTimer !== null;
   if (countdownCancelled) clearCountdown(rt);
 
   return {
-    othersReset,
+    othersReset: onlineLockedGuessers,
     countdownCancelled,
     teamNeedle: rt.teamNeedle,
     needleSeq: rt.needleSeq,
+    roundId: round.id,
   };
 }
 
@@ -594,7 +652,10 @@ export async function releaseNeedle(
   return { ok: true, needleDominionPlayerId: rt.needleDominionPlayerId, needleDominionSeq: rt.needleDominionSeq };
 }
 
-export async function executeCountdownReveal(roomId: string) {
+export async function executeCountdownReveal(
+  roomId: string,
+  lockedGuesserIdsSnapshot?: string[],
+) {
   const round = await prisma.round.findFirst({
     where: { roomId },
     orderBy: { roundNumber: "desc" },
@@ -607,16 +668,41 @@ export async function executeCountdownReveal(roomId: string) {
   const rt = ensureRuntime(roomId);
   const pos = rt.teamNeedle;
 
-  const guessers = round.room.players
+  const activeGuesserIds = round.room.players
     .filter((p) => p.id !== round.psychicPlayerId)
     .map((p) => p.id);
+  // Resolve against the lock-time cohort (minus anyone no longer active).
+  // This prevents late joiners from affecting scoring for the current round.
+  const guessers =
+    lockedGuesserIdsSnapshot && lockedGuesserIdsSnapshot.length > 0
+      ? lockedGuesserIdsSnapshot.filter((id) => activeGuesserIds.includes(id))
+      : activeGuesserIds;
 
+  // DB-level idempotency gate:
+  // only the first timer that transitions the round `guessing -> revealed`
+  // proceeds with writes. Concurrent countdown callbacks become no-ops.
   await prisma.$transaction(async (tx) => {
     const current = await tx.round.findUnique({ where: { id: round.id } });
-    if (!current || current.status !== "guessing") return;
+    if (!current || current.status !== "guessing" || !current.targetPosition)
+      return;
 
-    // Idempotency guard: if multiple countdown timers fire, keep only one guess
-    // per player by replacing any previous countdown-created guesses.
+    // Since all guesses created by countdown share the same `pos`,
+    // the average team guess is either `pos` (if there are guesses) or
+    // `pos` (if there are none, matching the old `ensureRuntime().teamNeedle`).
+    const teamGuess = pos;
+    const score = wavelengthScore(current.targetPosition, teamGuess);
+
+    const moved = await tx.round.updateMany({
+      where: { id: round.id, status: "guessing" },
+      data: {
+        status: "revealed",
+        finalTeamGuess: teamGuess,
+        score,
+      },
+    });
+    if (moved.count !== 1) return;
+
+    // Winner-only writes guesses so DB state stays consistent.
     await tx.guess.deleteMany({ where: { roundId: round.id } });
     if (guessers.length > 0) {
       await tx.guess.createMany({
@@ -627,36 +713,11 @@ export async function executeCountdownReveal(roomId: string) {
         })),
       });
     }
-  });
 
-  await doReveal(roomId, round.id);
-}
-
-async function doReveal(roomId: string, roundId: string) {
-  const round = await prisma.round.findUnique({
-    where: { id: roundId },
-    include: { guesses: true },
-  });
-  if (!round || !round.targetPosition) return;
-
-  const positions = round.guesses.map((g) => g.position);
-  const teamGuess =
-    positions.length > 0
-      ? positions.reduce((a, b) => a + b, 0) / positions.length
-      : ensureRuntime(roomId).teamNeedle;
-
-  const score = wavelengthScore(round.targetPosition, teamGuess);
-  await prisma.round.update({
-    where: { id: roundId },
-    data: {
-      status: "revealed",
-      finalTeamGuess: teamGuess,
-      score,
-    },
-  });
-  await prisma.room.update({
-    where: { id: roomId },
-    data: { status: "between_rounds" },
+    await tx.room.update({
+      where: { id: roomId },
+      data: { status: "between_rounds" },
+    });
   });
 }
 
@@ -673,9 +734,30 @@ export async function leaderNextRound(roomId: string, leaderId: string) {
     throw new Error("Round not ready for next");
   }
 
-  await prisma.round.update({
-    where: { id: round.id },
-    data: { status: "complete" },
+  await prisma.$transaction(async (tx) => {
+    const movedRound = await tx.round.updateMany({
+      where: { id: round.id, status: "revealed" },
+      data: { status: "complete" },
+    });
+    if (movedRound.count !== 1) {
+      throw new Error("Round not ready for next");
+    }
+
+    await tx.round.create({
+      data: {
+        roomId,
+        roundNumber: round.roundNumber + 1,
+        status: "selecting_psychic",
+      },
+    });
+
+    const movedRoom = await tx.room.updateMany({
+      where: { id: roomId, leaderPlayerId: leaderId, status: "between_rounds" },
+      data: { status: "in_round" },
+    });
+    if (movedRoom.count !== 1) {
+      throw new Error("Round not ready for next");
+    }
   });
 
   const rt = ensureRuntime(roomId);
@@ -690,18 +772,6 @@ export async function leaderNextRound(roomId: string, leaderId: string) {
   rt.needleDominionPlayerId = null;
   rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
-
-  await prisma.round.create({
-    data: {
-      roomId,
-      roundNumber: round.roundNumber + 1,
-      status: "selecting_psychic",
-    },
-  });
-  await prisma.room.update({
-    where: { id: roomId },
-    data: { status: "in_round" },
-  });
 }
 
 export async function leaderEndGame(roomId: string, leaderId: string) {
@@ -744,6 +814,8 @@ export async function leaveRoom(roomId: string, playerId: string) {
   if (rt) {
     rt.socketByPlayer.delete(playerId);
     rt.playerOrder = rt.playerOrder.filter((id) => id !== playerId);
+    // Leaving the room means the player must not be counted for this round.
+    rt.lockedGuessers.delete(playerId);
     if (rt.needleDominionPlayerId === playerId) {
       rt.needleDominionPlayerId = null;
       rt.needleDominionSeq += 1;

@@ -40,34 +40,67 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
   }
 
-  const code = await createUniqueRoomCode();
+  // Even with a uniqueness pre-check, there is still a narrow race where
+  // multiple concurrent room creations pick the same code. Retry on that.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = await createUniqueRoomCode();
+    try {
+      const { room, player } = await prisma.$transaction(async (tx) => {
+        const room = await tx.room.create({
+          data: {
+            code,
+            status: "lobby",
+          },
+        });
 
-  const room = await prisma.room.create({
-    data: {
-      code,
-      status: "lobby",
-    },
-  });
+        const player = await tx.player.create({
+          data: {
+            roomId: room.id,
+            nickname: parsed.data.nickname,
+            isLeader: true,
+          },
+        });
 
-  const player = await prisma.player.create({
-    data: {
-      roomId: room.id,
-      nickname: parsed.data.nickname,
-      isLeader: true,
-    },
-  });
+        await tx.room.update({
+          where: { id: room.id },
+          data: { leaderPlayerId: player.id },
+        });
 
-  await prisma.room.update({
-    where: { id: room.id },
-    data: { leaderPlayerId: player.id },
-  });
+        return { room, player };
+      });
 
-  const token = signPlayerToken({ playerId: player.id, roomId: room.id });
+      const token = signPlayerToken({
+        playerId: player.id,
+        roomId: room.id,
+      });
 
-  return NextResponse.json({
-    room: { id: room.id, code: room.code, status: room.status },
-    player: { id: player.id, nickname: player.nickname, isLeader: player.isLeader },
-    token,
-  });
+      return NextResponse.json({
+        room: { id: room.id, code: room.code, status: room.status },
+        player: {
+          id: player.id,
+          nickname: player.nickname,
+          isLeader: player.isLeader,
+        },
+        token,
+      });
+    } catch (e) {
+      if (
+        e &&
+        typeof e === "object" &&
+        "code" in e &&
+        // Prisma unique constraint violation
+        (e as { code?: unknown }).code === "P2002"
+      ) {
+        // Unique constraint violation on `Room.code` - retry with a new code.
+        continue;
+      }
+      throw e;
+    }
+  }
+
+  return NextResponse.json(
+    { error: "Failed to create room (code collision)" },
+    { status: 500 },
+  );
 }
 

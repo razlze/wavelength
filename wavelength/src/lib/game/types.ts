@@ -13,6 +13,8 @@ export type ThemePayload =
   | { kind: "preset"; presetId: string };
 
 export type RoomStatePayload = {
+  /** Monotonic per-room state sequence; guards against stale room:state delivery. */
+  roomStateSeq: number;
   room: { id: string; code: string; status: RoomStatus };
   players: PublicPlayer[];
   meId: string;
@@ -59,5 +61,7 @@ export type RoomRuntime = {
   needleDominionSeq: number;
   lockedGuessers: Set<string>;
   socketByPlayer: Map<string, string>;
+  /** Monotonic per-room sequence for full room:state payload broadcasts. */
+  roomStateSeq: number;
   countdownTimer: ReturnType<typeof setTimeout> | null;
 };

@@ -21,7 +21,10 @@ export function RoomClient({ code }: Props) {
   const draggingNeedleRef = useRef(false);
   const rafSendRef = useRef<number | null>(null);
   const pendingSendRef = useRef<number | null>(null);
+  const lastNeedlePosRef = useRef<number | null>(null);
+  const lastRoomStateSeqRef = useRef(0);
   const lastNeedleSeqRef = useRef(0);
+  const currentRoundIdRef = useRef<string | null>(null);
   const [needleDominionPlayerId, setNeedleDominionPlayerId] = useState<
     string | null
   >(null);
@@ -38,6 +41,7 @@ export function RoomClient({ code }: Props) {
   // immediately reflect lock/unlock locally while waiting for the server `room:state`.
   const [optimisticLocked, setOptimisticLocked] = useState<boolean | null>(null);
   const [lockRequestInFlight, setLockRequestInFlight] = useState(false);
+  const lockRequestPendingRef = useRef(false);
   const lockRequestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -85,6 +89,7 @@ export function RoomClient({ code }: Props) {
 
   useEffect(() => {
     if (!token) return;
+    lastRoomStateSeqRef.current = 0;
     const s = io({
       path: "/socket.io/",
       auth: { token },
@@ -95,7 +100,10 @@ export function RoomClient({ code }: Props) {
       setErr("Could not connect. Please try again."),
     );
     s.on("room:state", (payload: RoomStatePayload) => {
+      if (payload.roomStateSeq <= lastRoomStateSeqRef.current) return;
+      lastRoomStateSeqRef.current = payload.roomStateSeq;
       setState(payload);
+      currentRoundIdRef.current = payload.round?.id ?? null;
       meIdRef.current = payload.meId;
       const domId = payload.round?.needleDominionPlayerId ?? null;
       if (needleDominionPlayerIdRef.current !== domId) {
@@ -127,12 +135,16 @@ export function RoomClient({ code }: Props) {
         teamNeedle: number;
         needleSeq: number;
         needleDominionPlayerId: string | null;
+        roundId: string;
       }) => {
-      if (p.needleSeq <= lastNeedleSeqRef.current) return;
-      lastNeedleSeqRef.current = p.needleSeq;
-      // Ignore broadcasts while I'm the current dominion holder.
-      if (p.needleDominionPlayerId === meIdRef.current) return;
-      setNeedle(p.teamNeedle);
+        if (p.needleSeq <= lastNeedleSeqRef.current) return;
+        const currentRoundId = currentRoundIdRef.current;
+        // Ignore delayed needle packets from previous rounds.
+        if (currentRoundId && p.roundId !== currentRoundId) return;
+        lastNeedleSeqRef.current = p.needleSeq;
+        // Ignore broadcasts while I'm the current dominion holder.
+        if (p.needleDominionPlayerId === meIdRef.current) return;
+        setNeedle(p.teamNeedle);
       },
     );
     s.on("room:countdown_start", () => {
@@ -154,7 +166,15 @@ export function RoomClient({ code }: Props) {
       }
       setCountdown(null);
     });
-    s.on("error:msg", (p: { message: string }) => setErr(p.message));
+    s.on("error:msg", (p: { message: string }) => {
+      // If lock/unlock failed, clear local optimistic/in-flight state immediately.
+      if (lockRequestPendingRef.current) {
+        lockRequestPendingRef.current = false;
+        setLockRequestInFlight(false);
+        setOptimisticLocked(null);
+      }
+      setErr(p.message);
+    });
     s.on("room:closed", () => {
       setErr("Game ended.");
       s.disconnect();
@@ -208,6 +228,7 @@ export function RoomClient({ code }: Props) {
     setRevealCoverPeeling(false);
     setOptimisticLocked(null);
     setLockRequestInFlight(false);
+    lockRequestPendingRef.current = false;
     if (lockRequestTimeoutRef.current) {
       clearTimeout(lockRequestTimeoutRef.current);
       lockRequestTimeoutRef.current = null;
@@ -218,6 +239,8 @@ export function RoomClient({ code }: Props) {
     // ignore all subsequent `room:needle` updates after the first round.
     lastNeedleSeqRef.current = 0;
     lastNeedleDominionSeqRef.current = 0;
+    currentRoundIdRef.current = state?.round?.id ?? null;
+    lastNeedlePosRef.current = null;
   }, [state?.round?.id]);
 
   useEffect(() => {
@@ -305,6 +328,7 @@ export function RoomClient({ code }: Props) {
   useEffect(() => {
     if (!lockRequestInFlight) return;
     // If serverLocked changed, we can safely re-enable input.
+    lockRequestPendingRef.current = false;
     setLockRequestInFlight(false);
   }, [serverLocked]);
 
@@ -313,6 +337,7 @@ export function RoomClient({ code }: Props) {
     // Safety net: if something goes wrong and the server never updates,
     // don't permanently disable the button.
     lockRequestTimeoutRef.current = setTimeout(() => {
+      lockRequestPendingRef.current = false;
       setLockRequestInFlight(false);
       lockRequestTimeoutRef.current = null;
       setOptimisticLocked(null);
@@ -336,6 +361,7 @@ export function RoomClient({ code }: Props) {
     if (lockRequestInFlight) return;
     // Optimistically update the UI so the dial turns green immediately.
     setOptimisticLocked(!locked);
+    lockRequestPendingRef.current = true;
     setLockRequestInFlight(true);
     if (locked) {
       socket.emit("player:unlock_guess");
@@ -568,6 +594,7 @@ export function RoomClient({ code }: Props) {
                 ? undefined
                 : (v) => {
                     setNeedle(v);
+                    lastNeedlePosRef.current = v;
                     pendingSendRef.current = v;
                     if (rafSendRef.current === null) {
                       rafSendRef.current = requestAnimationFrame(() => {
@@ -608,7 +635,11 @@ export function RoomClient({ code }: Props) {
               if (!draggingNeedleRef.current) return;
               draggingNeedleRef.current = false;
               flushPendingNeedleMove();
-              socket.emit("player:needle_letgo", { playerId: myId });
+              const pos = lastNeedlePosRef.current;
+              socket.emit(
+                "player:needle_letgo",
+                pos === null ? { playerId: myId } : { playerId: myId, position: pos },
+              );
             }}
             disabled={dialReveal || !iGuess || locked || needleDominionLocked}
             leftLabel={round.theme.left}
