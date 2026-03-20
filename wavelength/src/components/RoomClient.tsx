@@ -21,7 +21,11 @@ export function RoomClient({ code }: Props) {
   const draggingNeedleRef = useRef(false);
   const rafSendRef = useRef<number | null>(null);
   const pendingSendRef = useRef<number | null>(null);
+  const lastNeedlePosRef = useRef<number | null>(null);
+  const lastRoomStateSeqRef = useRef(0);
   const lastNeedleSeqRef = useRef(0);
+  const lastLockSeqRef = useRef(0);
+  const currentRoundIdRef = useRef<string | null>(null);
   const [needleDominionPlayerId, setNeedleDominionPlayerId] = useState<
     string | null
   >(null);
@@ -34,6 +38,14 @@ export function RoomClient({ code }: Props) {
   const [revealPeelDone, setRevealPeelDone] = useState(false);
   const [revealCoverPeeling, setRevealCoverPeeling] = useState(false);
   const prevRoundStatusRef = useRef<string | null>(null);
+  // Optimistic UX for the center "lock" button:
+  // immediately reflect lock/unlock locally while waiting for the server `room:state`.
+  const [optimisticLocked, setOptimisticLocked] = useState<boolean | null>(null);
+  const [lockRequestInFlight, setLockRequestInFlight] = useState(false);
+  const lockRequestPendingRef = useRef(false);
+  const lockRequestTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useEffect(() => {
     const raw =
@@ -61,10 +73,7 @@ export function RoomClient({ code }: Props) {
 
     if (state.round?.teamNeedle !== undefined) {
       if (typeof state.round.needleSeq === "number") {
-        lastNeedleSeqRef.current = Math.max(
-          lastNeedleSeqRef.current,
-          state.round.needleSeq,
-        );
+        lastNeedleSeqRef.current = state.round.needleSeq;
       }
       const amDominionHolder = domId === state.meId;
       if (!amDominionHolder) setNeedle(state.round.teamNeedle);
@@ -78,6 +87,7 @@ export function RoomClient({ code }: Props) {
 
   useEffect(() => {
     if (!token) return;
+    lastRoomStateSeqRef.current = 0;
     const s = io({
       path: "/socket.io/",
       auth: { token },
@@ -88,7 +98,19 @@ export function RoomClient({ code }: Props) {
       setErr("Could not connect. Please try again."),
     );
     s.on("room:state", (payload: RoomStatePayload) => {
+      if (payload.roomStateSeq <= lastRoomStateSeqRef.current) return;
+      lastRoomStateSeqRef.current = payload.roomStateSeq;
+      const prevRoundId = currentRoundIdRef.current;
+      const nextRoundId = payload.round?.id ?? null;
+      // Reset per-round monotonic guards immediately on round transitions.
+      // Doing this here avoids races with async effects after setState.
+      if (prevRoundId !== nextRoundId) {
+        lastNeedleSeqRef.current = 0;
+        lastLockSeqRef.current = 0;
+        lastNeedleDominionSeqRef.current = 0;
+      }
       setState(payload);
+      currentRoundIdRef.current = nextRoundId;
       meIdRef.current = payload.meId;
       const domId = payload.round?.needleDominionPlayerId ?? null;
       if (needleDominionPlayerIdRef.current !== domId) {
@@ -97,10 +119,7 @@ export function RoomClient({ code }: Props) {
       }
       if (payload.round?.teamNeedle !== undefined) {
         if (typeof payload.round.needleSeq === "number") {
-          lastNeedleSeqRef.current = Math.max(
-            lastNeedleSeqRef.current,
-            payload.round.needleSeq,
-          );
+          lastNeedleSeqRef.current = payload.round.needleSeq;
         }
         if (domId !== payload.meId) setNeedle(payload.round.teamNeedle);
       }
@@ -120,12 +139,35 @@ export function RoomClient({ code }: Props) {
         teamNeedle: number;
         needleSeq: number;
         needleDominionPlayerId: string | null;
+        roundId: string;
       }) => {
-      if (p.needleSeq <= lastNeedleSeqRef.current) return;
-      lastNeedleSeqRef.current = p.needleSeq;
-      // Ignore broadcasts while I'm the current dominion holder.
-      if (p.needleDominionPlayerId === meIdRef.current) return;
-      setNeedle(p.teamNeedle);
+        const currentRoundId = currentRoundIdRef.current;
+        // Ignore delayed needle packets from previous rounds.
+        if (currentRoundId && p.roundId !== currentRoundId) return;
+        if (p.needleSeq <= lastNeedleSeqRef.current) return;
+        lastNeedleSeqRef.current = p.needleSeq;
+        // Ignore broadcasts while I'm the current dominion holder.
+        if (p.needleDominionPlayerId === meIdRef.current) return;
+        setNeedle(p.teamNeedle);
+      },
+    );
+    s.on(
+      "room:locks_updated",
+      (p: { lockedIds: string[]; roundId: string; lockSeq: number }) => {
+        const currentRoundId = currentRoundIdRef.current;
+        if (currentRoundId && p.roundId !== currentRoundId) return;
+        if (p.lockSeq <= lastLockSeqRef.current) return;
+        lastLockSeqRef.current = p.lockSeq;
+        setState((prev) => {
+          if (!prev?.round || prev.round.id !== p.roundId) return prev;
+          return {
+            ...prev,
+            round: {
+              ...prev.round,
+              lockedIds: p.lockedIds,
+            },
+          };
+        });
       },
     );
     s.on("room:countdown_start", () => {
@@ -147,7 +189,15 @@ export function RoomClient({ code }: Props) {
       }
       setCountdown(null);
     });
-    s.on("error:msg", (p: { message: string }) => setErr(p.message));
+    s.on("error:msg", (p: { message: string }) => {
+      // If lock/unlock failed, clear local optimistic/in-flight state immediately.
+      if (lockRequestPendingRef.current) {
+        lockRequestPendingRef.current = false;
+        setLockRequestInFlight(false);
+        setOptimisticLocked(null);
+      }
+      setErr(p.message);
+    });
     s.on("room:closed", () => {
       setErr("Game ended.");
       s.disconnect();
@@ -199,6 +249,22 @@ export function RoomClient({ code }: Props) {
   useEffect(() => {
     setRevealPeelDone(false);
     setRevealCoverPeeling(false);
+    setOptimisticLocked(null);
+    setLockRequestInFlight(false);
+    lockRequestPendingRef.current = false;
+    if (lockRequestTimeoutRef.current) {
+      clearTimeout(lockRequestTimeoutRef.current);
+      lockRequestTimeoutRef.current = null;
+    }
+
+    // Server resets runtime sequence numbers between rounds (e.g. `needleSeq`).
+    // Reset our local monotonic guards too, otherwise we would incorrectly
+    // ignore all subsequent `room:needle` updates after the first round.
+    lastNeedleSeqRef.current = 0;
+    lastLockSeqRef.current = 0;
+    lastNeedleDominionSeqRef.current = 0;
+    currentRoundIdRef.current = state?.round?.id ?? null;
+    lastNeedlePosRef.current = null;
   }, [state?.round?.id]);
 
   useEffect(() => {
@@ -261,11 +327,52 @@ export function RoomClient({ code }: Props) {
     : (state?.players ?? []);
   const iGuess =
     round && !isPsychic && state ? guessers.some((g) => g.id === state.meId) : false;
-  const locked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+  const serverLocked = (state && round?.lockedIds?.includes(state.meId)) ?? false;
+  const locked = optimisticLocked ?? serverLocked;
   const needleDominionLocked =
     needleDominionPlayerId !== null && state
       ? needleDominionPlayerId !== state.meId
       : false;
+
+  // Reconcile optimistic UI with server truth as soon as the server updates.
+  useEffect(() => {
+    // If the server and optimistic already match, we can just clear the override.
+    // If they don't match, clearing makes the UI converge to server state.
+    if (optimisticLocked !== null && optimisticLocked !== serverLocked) {
+      setOptimisticLocked(null);
+      return;
+    }
+    if (optimisticLocked !== null && optimisticLocked === serverLocked) {
+      // Clear so future toggles use server value until next optimistic interaction.
+      setOptimisticLocked(null);
+    }
+  }, [serverLocked]);
+
+  // Clear in-flight guard once we see the server lock state change.
+  useEffect(() => {
+    if (!lockRequestInFlight) return;
+    // If serverLocked changed, we can safely re-enable input.
+    lockRequestPendingRef.current = false;
+    setLockRequestInFlight(false);
+  }, [serverLocked]);
+
+  useEffect(() => {
+    if (!lockRequestInFlight) return;
+    // Safety net: if something goes wrong and the server never updates,
+    // don't permanently disable the button.
+    lockRequestTimeoutRef.current = setTimeout(() => {
+      lockRequestPendingRef.current = false;
+      setLockRequestInFlight(false);
+      lockRequestTimeoutRef.current = null;
+      setOptimisticLocked(null);
+    }, 6000);
+    return () => {
+      if (lockRequestTimeoutRef.current) {
+        clearTimeout(lockRequestTimeoutRef.current);
+        lockRequestTimeoutRef.current = null;
+      }
+    };
+  }, [lockRequestInFlight]);
   const dominionHolder = useMemo(() => {
     if (!state?.round) return null;
     if (!needleDominionPlayerId) return null;
@@ -275,12 +382,17 @@ export function RoomClient({ code }: Props) {
 
   const toggleLock = useCallback(() => {
     if (!socket || !iGuess) return;
+    if (lockRequestInFlight) return;
+    // Optimistically update the UI so the dial turns green immediately.
+    setOptimisticLocked(!locked);
+    lockRequestPendingRef.current = true;
+    setLockRequestInFlight(true);
     if (locked) {
       socket.emit("player:unlock_guess");
     } else {
       socket.emit("player:lock_guess");
     }
-  }, [socket, iGuess, locked]);
+  }, [socket, iGuess, locked, lockRequestInFlight]);
 
   const flushPendingNeedleMove = () => {
     if (!socket) return;
@@ -506,6 +618,7 @@ export function RoomClient({ code }: Props) {
                 ? undefined
                 : (v) => {
                     setNeedle(v);
+                    lastNeedlePosRef.current = v;
                     pendingSendRef.current = v;
                     if (rafSendRef.current === null) {
                       rafSendRef.current = requestAnimationFrame(() => {
@@ -546,7 +659,11 @@ export function RoomClient({ code }: Props) {
               if (!draggingNeedleRef.current) return;
               draggingNeedleRef.current = false;
               flushPendingNeedleMove();
-              socket.emit("player:needle_letgo", { playerId: myId });
+              const pos = lastNeedlePosRef.current;
+              socket.emit(
+                "player:needle_letgo",
+                pos === null ? { playerId: myId } : { playerId: myId, position: pos },
+              );
             }}
             disabled={dialReveal || !iGuess || locked || needleDominionLocked}
             leftLabel={round.theme.left}
@@ -573,12 +690,12 @@ export function RoomClient({ code }: Props) {
           )}
           {!dialReveal && iGuess && !locked && (
             <p className="text-center text-sm text-gray-400">
-              Tap the center to approve
+              Tap the center to confirm your guess
             </p>
           )}
           {!dialReveal && iGuess && locked && countdown === null && (
             <p className="text-center text-sm text-emerald-600">
-              Approved! Waiting for others…
+              Confirmed! Tap again to cancel
             </p>
           )}
           {!dialReveal && countdown !== null && (

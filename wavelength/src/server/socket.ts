@@ -13,8 +13,9 @@ import {
   onSocketDisconnect,
   psychicAccept,
   psychicSkip,
-  registerSocket,
+  nextRoomStateSeq,
   seedThemePresetsIfEmpty,
+  ensureRuntime,
   setTeamNeedle,
   setTheme,
   releaseNeedle,
@@ -39,6 +40,7 @@ const themeSchema = z.discriminatedUnion("kind", [
 
 const dominionSchema = z.object({
   playerId: z.string().min(1),
+  position: z.number().min(0).max(1).optional(),
 });
 
 async function broadcastRoom(io: IOServer, roomId: string) {
@@ -49,8 +51,11 @@ async function broadcastRoom(io: IOServer, roomId: string) {
     },
   });
   if (!room) return;
+  // Stamp this broadcast invocation once so late/stale room:state payloads
+  // can be ignored by clients even if async broadcasts complete out of order.
+  const roomStateSeq = nextRoomStateSeq(roomId);
   for (const p of room.players) {
-    const state = await buildRoomState(roomId, p.id);
+    const state = await buildRoomState(roomId, p.id, roomStateSeq);
     if (state) {
       io.to(`player:${p.id}`).emit("room:state", state);
     }
@@ -89,7 +94,18 @@ export function attachGameSockets(io: IOServer) {
       return;
     }
 
-    registerSocket(roomId, playerId, socket.id);
+    // Prevent multiple live sockets per player.
+    // If this player reconnects quickly, we want to disconnect the old socket
+    // so duplicate events don't reach multiple tabs/devices.
+    const rt = ensureRuntime(roomId);
+    const prevSocketId = rt.socketByPlayer.get(playerId);
+    // Overwrite mapping first, so the old socket's disconnect handler won't
+    // accidentally clear runtime state for the new socket.
+    rt.socketByPlayer.set(playerId, socket.id);
+    if (prevSocketId && prevSocketId !== socket.id) {
+      const prevSocket = io.sockets.sockets.get(prevSocketId);
+      prevSocket?.disconnect(true);
+    }
     await socket.join(`room:${room.code}`);
     await socket.join(`player:${playerId}`);
 
@@ -170,7 +186,7 @@ export function attachGameSockets(io: IOServer) {
       const parsed = needleSchema.safeParse(raw);
       if (!parsed.success) return;
       if (parsed.data.playerId !== playerId) return;
-      const { othersReset, countdownCancelled, teamNeedle, needleSeq } =
+      const { othersReset, countdownCancelled, teamNeedle, needleSeq, roundId } =
         await setTeamNeedle(
         roomId,
         playerId,
@@ -181,11 +197,18 @@ export function attachGameSockets(io: IOServer) {
         teamNeedle,
         needleSeq,
         needleDominionPlayerId: playerId,
+        roundId,
       });
       if (countdownCancelled) {
         io.to(`room:${room.code}`).emit("room:countdown_cancel");
       }
       if (othersReset) {
+        const rt = getRuntime(roomId);
+        io.to(`room:${room.code}`).emit("room:locks_updated", {
+          lockedIds: Array.from(rt?.lockedGuessers ?? []),
+          roundId,
+          lockSeq: needleSeq,
+        });
         await broadcastRoom(io, roomId);
       }
     });
@@ -206,6 +229,40 @@ export function attachGameSockets(io: IOServer) {
       const parsed = dominionSchema.safeParse(raw);
       if (!parsed.success) return;
       if (parsed.data.playerId !== playerId) return;
+      // Force-apply the terminal needle value on let-go so the server's
+      // revealed needle can't desync due to EPSILON filtering.
+      if (typeof parsed.data.position === "number") {
+        const {
+          othersReset,
+          countdownCancelled,
+          teamNeedle,
+          needleSeq,
+          roundId,
+        } = await setTeamNeedle(roomId, playerId, parsed.data.position, {
+          force: true,
+        });
+
+        if (teamNeedle !== null && needleSeq !== null) {
+          io.to(`room:${room.code}`).emit("room:needle", {
+            teamNeedle,
+            needleSeq,
+            needleDominionPlayerId: playerId,
+            roundId,
+          });
+          if (countdownCancelled) {
+            io.to(`room:${room.code}`).emit("room:countdown_cancel");
+          }
+          if (othersReset) {
+            const rt = getRuntime(roomId);
+            io.to(`room:${room.code}`).emit("room:locks_updated", {
+              lockedIds: Array.from(rt?.lockedGuessers ?? []),
+              roundId,
+              lockSeq: needleSeq,
+            });
+            await broadcastRoom(io, roomId);
+          }
+        }
+      }
       const res = await releaseNeedle(roomId, playerId);
       if (!res.ok) return;
       io.to(`room:${room.code}`).emit("room:needle_dominion", {
@@ -216,19 +273,59 @@ export function attachGameSockets(io: IOServer) {
 
     socket.on("player:lock_guess", async () => {
       try {
-        const { allLocked } = await lockGuess(roomId, playerId);
-        if (allLocked) {
-          const rt = getRuntime(roomId);
-          if (rt && rt.countdownTimer === null) {
-            io.to(`room:${room.code}`).emit("room:countdown_start");
-            rt.countdownTimer = setTimeout(async () => {
-              rt.countdownTimer = null;
-              await executeCountdownReveal(roomId);
-              await broadcastRoom(io, roomId);
-            }, 3500);
-          }
-        }
+        await lockGuess(roomId, playerId);
+
+        // Ensure clients receive the updated `lockedIds` (dial turns green)
+        // before the countdown starts.
         await broadcastRoom(io, roomId);
+
+        // Re-check lock state after the await above to avoid racing with
+        // `player:unlock_guess` and starting a stale countdown.
+        const rt = getRuntime(roomId);
+        if (!rt || rt.countdownTimer !== null) return;
+
+        const latestRound = await prisma.round.findFirst({
+          where: { roomId },
+          orderBy: { roundNumber: "desc" },
+          include: {
+            room: {
+              include: {
+                players: { where: { leftAt: null }, select: { id: true } },
+              },
+            },
+          },
+        });
+
+        if (!latestRound || latestRound.status !== "guessing") return;
+
+        const guesserIds = latestRound.room.players
+          .filter((p) => p.id !== latestRound.psychicPlayerId)
+          .map((p) => p.id);
+
+        // Only players with an active socket (not "away") are required
+        // for countdown to start, and they are the only ones snapshotted
+        // for scoring. If someone goes away after the countdown starts,
+        // they're still included via the snapshot.
+        const onlineGuesserIds = guesserIds.filter((id) =>
+          rt.socketByPlayer.has(id),
+        );
+
+        const allLockedNow =
+          onlineGuesserIds.length > 0 &&
+          onlineGuesserIds.every((id) => rt.lockedGuessers.has(id));
+
+        if (!allLockedNow) return;
+        // Atomic arm: no awaits between timer null-check and assignment.
+        // This prevents concurrent lock handlers from starting multiple timers.
+        if (rt.countdownTimer !== null) return;
+        // Snapshot this countdown's eligible guessers for scoring.
+        const lockedGuesserIdsSnapshot = [...onlineGuesserIds];
+        rt.countdownTimer = setTimeout(async () => {
+          rt.countdownTimer = null;
+          await executeCountdownReveal(roomId, lockedGuesserIdsSnapshot);
+          await broadcastRoom(io, roomId);
+        }, 3500);
+        io.to(`room:${room.code}`).emit("room:countdown_start");
       } catch (e) {
         socket.emit("error:msg", {
           message: e instanceof Error ? e.message : "Error",
@@ -239,10 +336,10 @@ export function attachGameSockets(io: IOServer) {
     socket.on("player:unlock_guess", async () => {
       try {
         const { wasCounting } = await unlockGuess(roomId, playerId);
+        await broadcastRoom(io, roomId);
         if (wasCounting) {
           io.to(`room:${room.code}`).emit("room:countdown_cancel");
         }
-        await broadcastRoom(io, roomId);
       } catch (e) {
         socket.emit("error:msg", {
           message: e instanceof Error ? e.message : "Error",
