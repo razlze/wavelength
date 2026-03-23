@@ -3,7 +3,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
-import type { RoomStatePayload } from "@/lib/game/types";
+import type { PublicPlayer, RoomStatePayload } from "@/lib/game/types";
+import { LeaderCrownIcon } from "./icons/RoomIcons";
 import { Dial } from "./Dial";
 
 function storageKey(code: string) {
@@ -11,6 +12,104 @@ function storageKey(code: string) {
 }
 
 type Props = { code: string };
+
+/** Psychic first, then others following runtime turn rotation. */
+function orderedPlayersForGame(
+  players: PublicPlayer[],
+  playerOrder: string[] | null,
+  psychicId: string | null,
+  psychicCandidateId: string | null,
+): PublicPlayer[] {
+  const byId = new Map(players.map((p) => [p.id, p]));
+  const headId = psychicId ?? psychicCandidateId ?? null;
+
+  if (!playerOrder?.length) {
+    if (!headId) return [...players];
+    return [...players].sort((a, b) => {
+      if (a.id === headId) return -1;
+      if (b.id === headId) return 1;
+      return 0;
+    });
+  }
+
+  const n = playerOrder.length;
+  const headIdx = headId ? playerOrder.indexOf(headId) : -1;
+
+  if (headIdx < 0 || !headId) {
+    const ordered = playerOrder
+      .map((id) => byId.get(id))
+      .filter((p): p is PublicPlayer => p !== undefined);
+    for (const p of players) {
+      if (!ordered.some((o) => o.id === p.id)) ordered.push(p);
+    }
+    return ordered;
+  }
+
+  const ordered: PublicPlayer[] = [];
+  for (let i = 0; i < n; i++) {
+    const id = playerOrder[(headIdx + i) % n]!;
+    const p = byId.get(id);
+    if (p) ordered.push(p);
+  }
+  for (const p of players) {
+    if (!ordered.some((o) => o.id === p.id)) ordered.push(p);
+  }
+  return ordered;
+}
+
+function PlayerRow({
+  player,
+  isMe,
+  showScore = true,
+  guessLocked = false,
+}: {
+  player: PublicPlayer;
+  isMe: boolean;
+  /** Hidden in lobby before the game starts. */
+  showScore?: boolean;
+  /** During guessing: guesser has confirmed their guess (locked in). */
+  guessLocked?: boolean;
+}) {
+  const rowTone = guessLocked
+    ? "border-emerald-200/90 bg-emerald-50"
+    : isMe
+      ? "border-[#11163A]/25 bg-[#11163A]/5"
+      : "border-gray-200 bg-white";
+  const nameTone = guessLocked
+    ? "text-emerald-900"
+    : isMe
+      ? "text-[#11163A]"
+      : "text-gray-800";
+  const scoreTone = guessLocked ? "text-emerald-700/90" : "text-gray-500";
+
+  return (
+    <div
+      className={`flex min-h-[44px] items-center gap-3 rounded-xl border px-3 py-2.5 text-sm ${
+        showScore ? "justify-between" : ""
+      } ${rowTone}`}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <span className={`truncate font-medium ${nameTone}`}>
+          {player.nickname}
+          {isMe ? " (You)" : ""}
+        </span>
+        {player.isLeader && (
+          <span className="inline-flex shrink-0 text-amber-500" title="Room leader">
+            <LeaderCrownIcon className="h-4 w-4" />
+          </span>
+        )}
+        {!player.online && (
+          <span className="shrink-0 text-xs text-gray-400">away</span>
+        )}
+      </div>
+      {showScore && (
+        <span className={`shrink-0 tabular-nums ${scoreTone}`}>
+          {player.totalScore}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function RoomClient({ code }: Props) {
   const [nickname, setNickname] = useState("");
@@ -38,6 +137,8 @@ export function RoomClient({ code }: Props) {
   /** Guesser: cover stays until peel finishes after guessing → reveal. */
   const [revealPeelDone, setRevealPeelDone] = useState(false);
   const [revealCoverPeeling, setRevealCoverPeeling] = useState(false);
+  /** Below md, player sidebar can collapse so the dial gets vertical space. */
+  const [mobilePlayersOpen, setMobilePlayersOpen] = useState(true);
   const prevRoundStatusRef = useRef<string | null>(null);
   // Optimistic UX for the center "lock" button:
   // immediately reflect lock/unlock locally while waiting for the server `room:state`.
@@ -417,6 +518,17 @@ export function RoomClient({ code }: Props) {
   const canStart =
     isLeader && state?.room.status === "lobby" && (state?.players.length ?? 0) >= 2;
 
+  const gameStarted = !!state && state.room.status !== "lobby";
+  const orderedPlayers = useMemo(() => {
+    if (!state) return [];
+    return orderedPlayersForGame(
+      state.players,
+      state.playerOrder,
+      state.round?.psychicId ?? null,
+      state.psychicCandidateId,
+    );
+  }, [state]);
+
   if (!token) {
     return (
       <div className="mx-auto flex max-w-md flex-col gap-6 rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
@@ -459,15 +571,22 @@ export function RoomClient({ code }: Props) {
     (round.status === "guessing" ||
       (dialReveal && !!round.reveal));
 
-  return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 pb-16">
-      {err && (
-        <div className="rounded-lg bg-red-50 px-4 py-2 text-center text-sm text-red-600">
-          {err}
-        </div>
-      )}
+  const outerShell = gameStarted
+    ? "mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 pb-16"
+    : "mx-auto flex max-w-2xl flex-col gap-6 px-4 pb-16";
 
-      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4">
+  const bodyRowClass = gameStarted
+    ? "flex w-full flex-col gap-6 md:flex-row md:items-start md:gap-10"
+    : "";
+
+  const lockedGuessersWhileGuessing =
+    round?.status === "guessing"
+      ? new Set(round.lockedIds ?? [])
+      : null;
+
+  return (
+    <div className={outerShell}>
+      <header className="flex w-full flex-wrap items-center justify-between gap-4 border-b border-gray-200 pb-4">
         <div>
           <p className="text-xs uppercase tracking-widest text-gray-400">
             Room code
@@ -521,34 +640,115 @@ export function RoomClient({ code }: Props) {
         </div>
       </header>
 
-      <section>
-        <h2 className="mb-2 text-sm font-medium text-gray-400">Players</h2>
-        <ul className="flex flex-wrap gap-2">
-          {state.players.map((p) => (
-            <li
-              key={p.id}
-              className={`rounded-full px-3 py-1 text-sm ${
-                p.id === state.meId
-                  ? "bg-[#11163A]/10 font-medium text-[#11163A]"
-                  : "bg-gray-100 text-gray-700"
-              }`}
-            >
-              {p.nickname}
-              {p.isLeader && " ★"}
-              {!p.online && " (away)"}
-              {round?.psychicId === p.id && " 🔮"}
-            </li>
-          ))}
-        </ul>
-      </section>
+      <div className={bodyRowClass}>
+        {gameStarted && (
+          <aside className="w-full shrink-0 md:sticky md:top-4 md:w-56 md:self-start">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm md:contents md:overflow-visible md:rounded-none md:border-0 md:bg-transparent md:shadow-none">
+              <button
+                type="button"
+                className="flex w-full min-h-[44px] items-center justify-between gap-2 px-3 py-2.5 text-left md:hidden"
+                onClick={() => setMobilePlayersOpen((o) => !o)}
+                aria-expanded={mobilePlayersOpen}
+                aria-controls="room-players-list"
+              >
+                <span className="text-xs font-semibold uppercase tracking-wider text-gray-400">
+                  {mobilePlayersOpen
+                    ? "Psychic:"
+                    : `Players${orderedPlayers.length > 0 ? ` (${orderedPlayers.length})` : ""}`}
+                </span>
+                <svg
+                  className={`h-5 w-5 shrink-0 text-gray-400 transition-transform duration-200 ${
+                    mobilePlayersOpen ? "rotate-180" : ""
+                  }`}
+                  viewBox="0 0 20 20"
+                  fill="currentColor"
+                  aria-hidden
+                >
+                  <path
+                    fillRule="evenodd"
+                    d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.94a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </button>
+              <h2 className="mb-2 hidden text-xs font-semibold uppercase tracking-wider text-gray-400 md:block">
+                Psychic:
+              </h2>
+            {orderedPlayers.length > 0 && (
+              <div
+                id="room-players-list"
+                className={`flex flex-col gap-2 px-2 pb-2 pt-1 md:px-0 md:pb-0 md:pt-0 ${
+                  !mobilePlayersOpen ? "max-md:hidden" : ""
+                }`}
+              >
+                <PlayerRow
+                  player={orderedPlayers[0]!}
+                  isMe={orderedPlayers[0]!.id === state.meId}
+                  guessLocked={
+                    lockedGuessersWhileGuessing?.has(
+                      orderedPlayers[0]!.id,
+                    ) ?? false
+                  }
+                />
+                {orderedPlayers.length > 1 && (
+                  <>
+                    <div className="my-1 border-t border-gray-200/90" />
+                    <div className="flex flex-col gap-2">
+                      <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                        Next up:
+                      </p>
+                      {orderedPlayers.slice(1).map((p) => (
+                        <PlayerRow
+                          key={p.id}
+                          player={p}
+                          isMe={p.id === state.meId}
+                          guessLocked={
+                            lockedGuessersWhileGuessing?.has(p.id) ?? false
+                          }
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+            </div>
+          </aside>
+        )}
 
-      {state.room.status === "lobby" && (
-        <p className="text-center text-gray-500">
-          Waiting for the leader to start… Need at least 2 players.
-        </p>
-      )}
+        <div className="flex min-w-0 flex-1 flex-col gap-6">
+        {err && (
+          <div className="rounded-lg bg-red-50 px-4 py-2 text-center text-sm text-red-600">
+            {err}
+          </div>
+        )}
 
-      {round?.status === "selecting_psychic" && (
+        {!gameStarted && (
+          <section>
+            <h2 className="mb-2 text-sm font-medium text-gray-400">
+              Joined so far
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {state.players.map((p) => (
+                <li key={p.id}>
+                  <PlayerRow
+                    player={p}
+                    isMe={p.id === state.meId}
+                    showScore={false}
+                  />
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {state.room.status === "lobby" && (
+          <p className="text-center text-gray-500">
+            Waiting for the leader to start… Need at least 2 players.
+          </p>
+        )}
+
+        {round?.status === "selecting_psychic" && (
         <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
           {isCandidate ? (
             <>
@@ -728,6 +928,8 @@ export function RoomClient({ code }: Props) {
           )}
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }

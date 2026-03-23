@@ -112,12 +112,36 @@ export async function buildRoomState(
   });
 
   const online = new Set(rt?.socketByPlayer.keys() ?? []);
+
+  const guessScoreRows = await prisma.guess.findMany({
+    where: { round: { roomId } },
+    select: {
+      playerId: true,
+      round: { select: { score: true } },
+    },
+  });
+  const totalScoreByPlayer = new Map<string, number>();
+  for (const row of guessScoreRows) {
+    const s = row.round.score;
+    if (s == null) continue;
+    totalScoreByPlayer.set(
+      row.playerId,
+      (totalScoreByPlayer.get(row.playerId) ?? 0) + s,
+    );
+  }
+
   const players = room.players.map((p) => ({
     id: p.id,
     nickname: p.nickname,
     isLeader: p.isLeader,
     online: online.has(p.id),
+    totalScore: totalScoreByPlayer.get(p.id) ?? 0,
   }));
+
+  const playerOrder =
+    room.status !== "lobby" && rt && rt.playerOrder.length > 0
+      ? [...rt.playerOrder]
+      : null;
 
   let roundPayload: RoomStatePayload["round"] = null;
   let psychicCandidateId: string | null = null;
@@ -196,6 +220,7 @@ export async function buildRoomState(
     roomStateSeq,
     room: { id: room.id, code: room.code, status: room.status },
     players,
+    playerOrder,
     meId,
     round: roundPayload,
     psychicCandidateId,
