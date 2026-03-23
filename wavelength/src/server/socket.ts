@@ -18,10 +18,12 @@ import {
   ensureRuntime,
   setTeamNeedle,
   setTheme,
+  setRoomPointsSystem,
   releaseNeedle,
   startGame,
   unlockGuess,
 } from "@/lib/game/gameService";
+import { PointsSystem } from "@/generated/prisma/enums";
 import { z } from "zod";
 
 const needleSchema = z.object({
@@ -41,6 +43,9 @@ const themeSchema = z.discriminatedUnion("kind", [
 const dominionSchema = z.object({
   playerId: z.string().min(1),
   position: z.number().min(0).max(1).optional(),
+});
+const pointsSystemSchema = z.object({
+  pointsSystem: z.enum(PointsSystem),
 });
 
 async function broadcastRoom(io: IOServer, roomId: string) {
@@ -114,6 +119,22 @@ export function attachGameSockets(io: IOServer) {
     socket.on("leader:start_game", async () => {
       try {
         await startGame(roomId, playerId);
+        await broadcastRoom(io, roomId);
+      } catch (e) {
+        socket.emit("error:msg", {
+          message: e instanceof Error ? e.message : "Error",
+        });
+      }
+    });
+
+    socket.on("leader:set_points_system", async (raw: unknown) => {
+      const parsed = pointsSystemSchema.safeParse(raw);
+      if (!parsed.success) {
+        socket.emit("error:msg", { message: "Invalid points system" });
+        return;
+      }
+      try {
+        await setRoomPointsSystem(roomId, playerId, parsed.data.pointsSystem);
         await broadcastRoom(io, roomId);
       } catch (e) {
         socket.emit("error:msg", {

@@ -16,6 +16,7 @@ model Room {
   id              String   @id @default(uuid())
   code            String   @unique
   status          RoomStatus
+  pointsSystem    PointsSystem @default(PSYCHIC_BIASED)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
   leaderPlayerId  String?
@@ -37,6 +38,7 @@ model Player {
   room   Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
   rounds Round[] @relation("PsychicRounds")
   guesses Guess[]
+  pointAwards RoundPointAward[]
 
   @@index([roomId])
 }
@@ -58,6 +60,7 @@ model Round {
   psychic     Player?  @relation("PsychicRounds", fields: [psychicPlayerId], references: [id])
   themePreset ThemePreset? @relation(fields: [themePresetId], references: [id])
   guesses     Guess[]
+  pointAwards RoundPointAward[]
 
   @@index([roomId])
   @@index([psychicPlayerId])
@@ -73,6 +76,21 @@ model Guess {
   round  Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
   player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
+  @@index([roundId])
+  @@index([playerId])
+}
+
+model RoundPointAward {
+  id        String   @id @default(uuid())
+  roundId   String
+  playerId  String
+  points    Int
+  createdAt DateTime @default(now())
+
+  round  Round  @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, playerId])
   @@index([roundId])
   @@index([playerId])
 }
@@ -99,4 +117,11 @@ enum RoundStatus {
   guessing
   revealed
   complete
+}
+
+enum PointsSystem {
+  PSYCHIC_DOMINANT
+  PSYCHIC_BIASED
+  GUESSER_BIASED
+  GUESSER_DOMINANT
 }

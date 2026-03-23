@@ -1,12 +1,16 @@
-import type { RoomStatus, RoundStatus } from "../../generated/prisma/enums";
-export type { RoomStatus, RoundStatus };
+import type {
+  PointsSystem,
+  RoomStatus,
+  RoundStatus,
+} from "../../generated/prisma/enums";
+export type { PointsSystem, RoomStatus, RoundStatus };
 
 export type PublicPlayer = {
   id: string;
   nickname: string;
   isLeader: boolean;
   online: boolean;
-  /** Sum of team round scores from rounds where this player was scored as a guesser. */
+  /** Sum of awarded points from every round that has produced point awards (revealed or complete). */
   totalScore: number;
 };
 
@@ -17,7 +21,12 @@ export type ThemePayload =
 export type RoomStatePayload = {
   /** Monotonic per-room state sequence; guards against stale room:state delivery. */
   roomStateSeq: number;
-  room: { id: string; code: string; status: RoomStatus };
+  room: {
+    id: string;
+    code: string;
+    status: RoomStatus;
+    pointsSystem: PointsSystem;
+  };
   players: PublicPlayer[];
   /**
    * Turn rotation order (runtime), oldest-first shuffle from game start.
@@ -50,6 +59,7 @@ export type RoomStatePayload = {
       target: number;
       teamGuess: number;
       score: number;
+      pointAwards: { playerId: string; points: number }[];
     };
   };
   psychicCandidateId: string | null;
