@@ -6,6 +6,8 @@ export type PublicPlayer = {
   nickname: string;
   isLeader: boolean;
   online: boolean;
+  /** Sum of team round scores from rounds where this player was scored as a guesser. */
+  totalScore: number;
 };
 
 export type ThemePayload =
@@ -17,6 +19,11 @@ export type RoomStatePayload = {
   roomStateSeq: number;
   room: { id: string; code: string; status: RoomStatus };
   players: PublicPlayer[];
+  /**
+   * Turn rotation order (runtime), oldest-first shuffle from game start.
+   * Only set after the game has left the lobby; null in lobby.
+   */
+  playerOrder: string[] | null;
   meId: string;
   round: null | {
     id: string;
