@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import type { RoomRuntime, RoomStatePayload, ThemePayload } from "./types";
 import { shuffle, wavelengthScore } from "./scoring";
+import { calculateRoundAwards } from "./pointsSystem";
 
 const runtimes = new Map<string, RoomRuntime>();
 
@@ -108,26 +109,19 @@ export async function buildRoomState(
   const round = await prisma.round.findFirst({
     where: { roomId },
     orderBy: { roundNumber: "desc" },
-    include: { guesses: true, themePreset: true },
+    include: { guesses: true, themePreset: true, pointAwards: true },
   });
 
   const online = new Set(rt?.socketByPlayer.keys() ?? []);
 
-  const guessScoreRows = await prisma.guess.findMany({
+  const guessScoreGrouped = await prisma.roundPointAward.groupBy({
+    by: ["playerId"],
     where: { round: { roomId } },
-    select: {
-      playerId: true,
-      round: { select: { score: true } },
-    },
+    _sum: { points: true },
   });
   const totalScoreByPlayer = new Map<string, number>();
-  for (const row of guessScoreRows) {
-    const s = row.round.score;
-    if (s == null) continue;
-    totalScoreByPlayer.set(
-      row.playerId,
-      (totalScoreByPlayer.get(row.playerId) ?? 0) + s,
-    );
+  for (const row of guessScoreGrouped) {
+    totalScoreByPlayer.set(row.playerId, row._sum.points ?? 0);
   }
 
   const players = room.players.map((p) => ({
@@ -211,6 +205,10 @@ export async function buildRoomState(
               target: round.targetPosition ?? 0,
               teamGuess: round.finalTeamGuess ?? 0,
               score: round.score ?? 0,
+              pointAwards: round.pointAwards.map((award) => ({
+                playerId: award.playerId,
+                points: award.points,
+              })),
             }
           : undefined,
     };
@@ -218,7 +216,12 @@ export async function buildRoomState(
 
   return {
     roomStateSeq,
-    room: { id: room.id, code: room.code, status: room.status },
+    room: {
+      id: room.id,
+      code: room.code,
+      status: room.status,
+      pointsSystem: room.pointsSystem,
+    },
     players,
     playerOrder,
     meId,
@@ -314,6 +317,20 @@ export async function startGame(roomId: string, leaderId: string) {
   rt.needleDominionSeq = 0;
   rt.lockedGuessers = new Set();
   clearCountdown(rt);
+}
+
+export async function setRoomPointsSystem(
+  roomId: string,
+  leaderId: string,
+  pointsSystem: RoomStatePayload["room"]["pointsSystem"],
+) {
+  const updated = await prisma.room.updateMany({
+    where: { id: roomId, leaderPlayerId: leaderId, status: "lobby" },
+    data: { pointsSystem },
+  });
+  if (updated.count !== 1) {
+    throw new Error("Only the leader can change scoring before the game starts");
+  }
 }
 
 async function abortActiveRoundAndStartNew(
@@ -693,8 +710,9 @@ export async function executeCountdownReveal(
   const rt = ensureRuntime(roomId);
   const pos = rt.teamNeedle;
 
+  const psychicId = round.psychicPlayerId;
   const activeGuesserIds = round.room.players
-    .filter((p) => p.id !== round.psychicPlayerId)
+    .filter((p) => p.id !== psychicId)
     .map((p) => p.id);
   // Resolve against the lock-time cohort (minus anyone no longer active).
   // This prevents late joiners from affecting scoring for the current round.
@@ -708,7 +726,7 @@ export async function executeCountdownReveal(
   // proceeds with writes. Concurrent countdown callbacks become no-ops.
   await prisma.$transaction(async (tx) => {
     const current = await tx.round.findUnique({ where: { id: round.id } });
-    if (!current || current.status !== "guessing" || !current.targetPosition)
+    if (!current || current.status !== "guessing" || current.targetPosition == null)
       return;
 
     // Since all guesses created by countdown share the same `pos`,
@@ -716,6 +734,12 @@ export async function executeCountdownReveal(
     // `pos` (if there are none, matching the old `ensureRuntime().teamNeedle`).
     const teamGuess = pos;
     const score = wavelengthScore(current.targetPosition, teamGuess);
+    const awards = calculateRoundAwards({
+      pointsSystem: round.room.pointsSystem,
+      baseScore: score,
+      guesserIds: guessers,
+      psychicId,
+    });
 
     const moved = await tx.round.updateMany({
       where: { id: round.id, status: "guessing" },
@@ -729,12 +753,22 @@ export async function executeCountdownReveal(
 
     // Winner-only writes guesses so DB state stays consistent.
     await tx.guess.deleteMany({ where: { roundId: round.id } });
+    await tx.roundPointAward.deleteMany({ where: { roundId: round.id } });
     if (guessers.length > 0) {
       await tx.guess.createMany({
         data: guessers.map((pid) => ({
           roundId: round.id,
           playerId: pid,
           position: pos,
+        })),
+      });
+    }
+    if (awards.size > 0) {
+      await tx.roundPointAward.createMany({
+        data: Array.from(awards.entries()).map(([playerId, points]) => ({
+          roundId: round.id,
+          playerId,
+          points,
         })),
       });
     }

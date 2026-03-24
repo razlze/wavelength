@@ -1,11 +1,30 @@
 "use client";
 /* eslint-disable react-hooks/set-state-in-effect */
 
+import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io } from "socket.io-client";
+import { CircleHelp } from "lucide-react";
 import type { PublicPlayer, RoomStatePayload } from "@/lib/game/types";
 import { LeaderCrownIcon } from "./icons/RoomIcons";
 import { Dial } from "./Dial";
+import {
+  POINTS_SYSTEMS,
+  RECOMMENDED_POINTS_SYSTEM,
+} from "@/lib/game/pointsSystem";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 function storageKey(code: string) {
   return `wl:${code}`;
@@ -62,6 +81,8 @@ function PlayerRow({
   isMe,
   showScore = true,
   guessLocked = false,
+  displayedScore,
+  roundGain = 0,
 }: {
   player: PublicPlayer;
   isMe: boolean;
@@ -69,6 +90,10 @@ function PlayerRow({
   showScore?: boolean;
   /** During guessing: guesser has confirmed their guess (locked in). */
   guessLocked?: boolean;
+  /** Optional rendered score (defaults to player's totalScore). */
+  displayedScore?: number;
+  /** Optional round gain indicator value. */
+  roundGain?: number;
 }) {
   const rowTone = guessLocked
     ? "border-emerald-200/90 bg-emerald-50"
@@ -81,6 +106,7 @@ function PlayerRow({
       ? "text-[#11163A]"
       : "text-gray-800";
   const scoreTone = guessLocked ? "text-emerald-700/90" : "text-gray-500";
+  const shownScore = displayedScore ?? player.totalScore;
 
   return (
     <div
@@ -103,9 +129,16 @@ function PlayerRow({
         )}
       </div>
       {showScore && (
-        <span className={`shrink-0 tabular-nums ${scoreTone}`}>
-          {player.totalScore}
-        </span>
+        <div className="shrink-0">
+          <div className="flex items-center gap-1.5">
+            {roundGain > 0 && (
+              <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 sm:hidden">
+                +{roundGain}
+              </span>
+            )}
+            <span className={`tabular-nums ${scoreTone}`}>{shownScore}</span>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -517,6 +550,7 @@ export function RoomClient({ code }: Props) {
   const isLeader = me?.isLeader ?? false;
   const canStart =
     isLeader && state?.room.status === "lobby" && (state?.players.length ?? 0) >= 2;
+  const canConfigurePointsSystem = isLeader && state?.room.status === "lobby";
 
   const gameStarted = !!state && state.room.status !== "lobby";
   const orderedPlayers = useMemo(() => {
@@ -583,6 +617,28 @@ export function RoomClient({ code }: Props) {
     round?.status === "guessing"
       ? new Set(round.lockedIds ?? [])
       : null;
+  const roundGainByPlayer = (() => {
+    const map = new Map<string, number>();
+    const awards = round?.reveal?.pointAwards ?? [];
+    for (const award of awards) {
+      map.set(award.playerId, (map.get(award.playerId) ?? 0) + award.points);
+    }
+    return map;
+  })();
+  const shouldDelayScoreRollup =
+    !!round?.reveal &&
+    (round.status === "revealed" ||
+      round.status === "complete" ||
+      state.room.status === "between_rounds");
+  const displayedScoreByPlayer = (() => {
+    const map = new Map<string, number>();
+    for (const p of state.players) {
+      const gain = roundGainByPlayer.get(p.id) ?? 0;
+      const delayed = shouldDelayScoreRollup ? gain : 0;
+      map.set(p.id, Math.max(0, p.totalScore - delayed));
+    }
+    return map;
+  })();
 
   return (
     <div className={outerShell}>
@@ -681,35 +737,42 @@ export function RoomClient({ code }: Props) {
                   !mobilePlayersOpen ? "max-md:hidden" : ""
                 }`}
               >
-                <PlayerRow
-                  player={orderedPlayers[0]!}
-                  isMe={orderedPlayers[0]!.id === state.meId}
-                  guessLocked={
-                    lockedGuessersWhileGuessing?.has(
-                      orderedPlayers[0]!.id,
-                    ) ?? false
-                  }
-                />
-                {orderedPlayers.length > 1 && (
-                  <>
-                    <div className="my-1 border-t border-gray-200/90" />
-                    <div className="flex flex-col gap-2">
-                      <p className="px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
+                {orderedPlayers.flatMap((p, i) => {
+                  const gain = roundGainByPlayer.get(p.id) ?? 0;
+                  const items: ReactNode[] = [];
+
+                  if (i === 1) {
+                    items.push(
+                      <div key="__divider" className="my-1 border-t border-gray-200/90" />,
+                      <p key="__label" className="px-1 text-[11px] font-medium uppercase tracking-wide text-gray-400">
                         Next up:
-                      </p>
-                      {orderedPlayers.slice(1).map((p) => (
-                        <PlayerRow
-                          key={p.id}
-                          player={p}
-                          isMe={p.id === state.meId}
-                          guessLocked={
-                            lockedGuessersWhileGuessing?.has(p.id) ?? false
-                          }
-                        />
-                      ))}
-                    </div>
-                  </>
-                )}
+                      </p>,
+                    );
+                  }
+
+                  items.push(
+                    <div key={p.id} className="relative">
+                      <PlayerRow
+                        player={p}
+                        isMe={p.id === state.meId}
+                        displayedScore={
+                          displayedScoreByPlayer.get(p.id) ?? p.totalScore
+                        }
+                        roundGain={gain}
+                        guessLocked={
+                          lockedGuessersWhileGuessing?.has(p.id) ?? false
+                        }
+                      />
+                      {gain > 0 && (
+                        <span className="pointer-events-none absolute right-0 top-1/2 hidden translate-x-[125%] -translate-y-1/2 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 sm:inline-flex">
+                          +{gain}
+                        </span>
+                      )}
+                    </div>,
+                  );
+
+                  return items;
+                })}
               </div>
             )}
             </div>
@@ -743,9 +806,72 @@ export function RoomClient({ code }: Props) {
         )}
 
         {state.room.status === "lobby" && (
-          <p className="text-center text-gray-500">
-            Waiting for the leader to start… Need at least 2 players.
-          </p>
+          <div className="space-y-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-[#11163A]">Scoring style</p>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          aria-label="Show scoring style details"
+                          className="inline-flex h-5 w-5 items-center justify-center text-gray-500 hover:text-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#11163A]/25"
+                        >
+                          <CircleHelp className="h-4 w-4" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent align="start" className="p-3">
+                        <div className="space-y-2 text-sm text-gray-600">
+                          {POINTS_SYSTEMS.map((system) => (
+                            <p key={system.id}>
+                              <strong className="text-[#11163A]">
+                                {system.label}
+                                {system.id === RECOMMENDED_POINTS_SYSTEM
+                                  ? " (Recommended)"
+                                  : ""}
+                                :
+                              </strong>{" "}
+                              {system.longDescription}
+                            </p>
+                          ))}
+                        </div>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  Choose how points are awarded each round.
+                </p>
+              </div>
+              <div className="sm:pl-4">
+                <Select
+                  value={state.room.pointsSystem}
+                  disabled={!canConfigurePointsSystem}
+                  onValueChange={(value) =>
+                    socket?.emit("leader:set_points_system", {
+                      pointsSystem: value,
+                    })
+                  }
+                >
+                  <SelectTrigger className="sm:w-auto">
+                    <SelectValue placeholder="Select scoring style" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {POINTS_SYSTEMS.map((system) => (
+                      <SelectItem key={system.id} value={system.id}>
+                        {system.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <p className="text-center text-gray-500">
+              Waiting for the leader to start… Need at least 2 players.
+            </p>
+          </div>
         )}
 
         {round?.status === "selecting_psychic" && (
@@ -800,6 +926,29 @@ export function RoomClient({ code }: Props) {
 
       {showDialBoard && round.theme && (
         <div className="relative flex flex-col items-center gap-4">
+          <div className="hidden min-h-[20px] items-center justify-center md:flex">
+            {!dialReveal && isPsychic && (
+              <p className="text-center text-sm text-[#4D8B8B]">
+                You&apos;re the Psychic — give a clue! Don&apos;t reveal the
+                target.
+              </p>
+            )}
+            {!dialReveal && iGuess && !locked && (
+              <p className="text-center text-sm text-gray-400">
+                Tap the center to confirm your guess
+              </p>
+            )}
+            {!dialReveal && iGuess && locked && countdown === null && (
+              <p className="text-center text-sm text-emerald-600">
+                Confirmed! Tap again to cancel
+              </p>
+            )}
+            {dialReveal && round.reveal && isLeader && (
+              <p className="text-center text-sm text-gray-400">
+                Press <strong>Next round</strong> when everyone is ready.
+              </p>
+            )}
+          </div>
           <Dial
             mode={
               dialReveal ? "reveal" : isPsychic ? "psychic" : "guess"
@@ -884,18 +1033,18 @@ export function RoomClient({ code }: Props) {
             coverRevealing={iGuess && revealCoverPeeling}
           />
           {!dialReveal && isPsychic && (
-            <p className="text-center text-sm text-[#4D8B8B]">
+            <p className="text-center text-sm text-[#4D8B8B] md:hidden">
               You&apos;re the Psychic — give a clue! Don&apos;t reveal the
               target.
             </p>
           )}
           {!dialReveal && iGuess && !locked && (
-            <p className="text-center text-sm text-gray-400">
+            <p className="text-center text-sm text-gray-400 md:hidden">
               Tap the center to confirm your guess
             </p>
           )}
           {!dialReveal && iGuess && locked && countdown === null && (
-            <p className="text-center text-sm text-emerald-600">
+            <p className="text-center text-sm text-emerald-600 md:hidden">
               Confirmed! Tap again to cancel
             </p>
           )}
@@ -910,21 +1059,10 @@ export function RoomClient({ code }: Props) {
               </span>
             </div>
           )}
-          {dialReveal && round.reveal && (
-            <div className="rounded-2xl border border-gray-200 bg-white p-6 text-center shadow-sm">
-              <p className="text-3xl font-bold text-[#11163A]">
-                {round.reveal.score} pts
-              </p>
-              <p className="mt-1 text-sm text-gray-500">
-                Target {(round.reveal.target * 100).toFixed(0)}% · Team{" "}
-                {(round.reveal.teamGuess * 100).toFixed(0)}%
-              </p>
-              {isLeader && (
-                <p className="mt-3 text-sm text-gray-400">
-                  Press <strong>Next round</strong> when everyone is ready.
-                </p>
-              )}
-            </div>
+          {dialReveal && round.reveal && isLeader && (
+            <p className="text-center text-sm text-gray-400 md:hidden">
+              Press <strong>Next round</strong> when everyone is ready.
+            </p>
           )}
         </div>
       )}
@@ -973,17 +1111,18 @@ function PsychicThemeForm({
       </div>
       {mode === "preset" ? (
         <div className="flex flex-col gap-3">
-          <select
-            className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-[#11163A]"
-            value={presetId}
-            onChange={(e) => setPresetId(e.target.value)}
-          >
-            {presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.leftLabel} ↔ {p.rightLabel}
-              </option>
-            ))}
-          </select>
+          <Select value={presetId} onValueChange={setPresetId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Choose a spectrum preset" />
+            </SelectTrigger>
+            <SelectContent>
+              {presets.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.leftLabel} ↔ {p.rightLabel}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <button
             type="button"
             onClick={() => onSubmit({ kind: "preset", presetId })}
