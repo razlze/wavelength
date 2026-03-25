@@ -23,8 +23,6 @@ model Room {
 
   players Player[]
   rounds  Round[]
-
-  @@index([code])
 }
 
 model Player {

@@ -31,8 +31,10 @@ Party game: one **Psychic** per round picks a spectrum (e.g. Hot ↔ Cold); only
 
    ```bash
    npm run build
-   npm start
+   npm run start:with-migrate
    ```
+
+   (`start:with-migrate` applies pending Prisma migrations, then starts the server. On Render, set **Start Command** to `npm run start:with-migrate` and keep **Build Command** as `npm run build`.)
 
 ## Production ops / maintenance notes
 
@@ -41,7 +43,8 @@ This app runs Socket.IO from a **custom Node server** (`server.ts`) alongside Ne
 ### Deployment architecture
 
 - **App host**: Render Web Service (Node process)
-  - Runs `npm start` which starts the custom server in `server.ts` (Next.js + Socket.IO on the same port).
+  - **Build Command**: `npm run build` (Prisma client + Next.js; no DB migrations).
+  - **Start Command**: `npm run start:with-migrate` (runs `prisma migrate deploy`, then the same process as `npm start` — custom server in `server.ts` with Next.js + Socket.IO).
   - If this repo is a monorepo, set Render’s **Root Directory** to `wavelength` (the folder containing `package.json`).
 - **Production database**: Neon Postgres
   - Accessed via `DATABASE_URL` from the Node server (Prisma + `pg` adapter).
@@ -54,7 +57,8 @@ Request flow:
 
 ### Required environment variables
 
-- **`DATABASE_URL`**: Postgres connection string (use your managed DB provider’s “direct” URL for a long-running server).
+- **`DATABASE_URL`**: Postgres connection string for the app (Neon’s **pooled** URL is fine for the running server).
+- **`DIRECT_DATABASE_URL`**: Neon’s **direct** (non-pooled) URL for `prisma migrate deploy` in `start:with-migrate`. Without this, migrations may fail through pgBouncer.
 - **`JWT_SECRET`**: required in production. Set to a strong random string (min 32 chars). Rotating this will invalidate existing player tokens.
 - **`NEXT_PUBLIC_APP_ORIGIN`**: the deployed site origin (scheme + host only), e.g. `https://YOUR-SERVICE.onrender.com`.
   - This is used for Socket.IO CORS in production.
@@ -62,12 +66,9 @@ Request flow:
 
 ### Database schema changes
 
-This repo currently uses **`prisma db push`** (no `prisma/migrations/` directory). That’s fast for early development, but it means:
+Schema is evolved with **Prisma Migrate**: commit files under `prisma/migrations/`, use `npm run db:migrate:dev` locally, and rely on **`npm run start:with-migrate`** on Render (or `npm run db:migrate:deploy` manually) to apply pending migrations. For a DB that predates migrations, baseline with `prisma migrate resolve` once (see Prisma docs).
 
-- There is **no migration history** committed to the repo.
-- You should be careful with schema changes (especially destructive ones).
-
-If you want safer, repeatable production schema evolution, switch to **Prisma Migrate** (`prisma migrate dev` locally + `prisma migrate deploy` in production).
+`npm run db:push` remains for quick local experiments only; production should use migrations.
 
 ### Seed behavior
 
@@ -88,14 +89,17 @@ Real-time game state includes **in-memory runtime state per room** (see `RoomRun
 
 ## Scripts
 
-| Script            | Description                        |
-| ----------------- | ---------------------------------- |
-| `npm run dev`     | Custom server + hot reload         |
-| `npm run build`   | Prisma generate + Next build       |
-| `npm start`       | Production server                  |
-| `npm test`        | Vitest (scoring + shuffle helpers) |
-| `npm run db:push` | Apply schema to DB                 |
-| `npm run db:seed` | Theme presets                      |
+| Script                       | Description                                      |
+| ---------------------------- | ------------------------------------------------ |
+| `npm run dev`                | Custom server + hot reload                       |
+| `npm run build`              | Prisma generate + Next build                     |
+| `npm start`                  | Production server                                |
+| `npm run start:with-migrate` | `migrate deploy` then production server (Render) |
+| `npm run db:migrate:dev`     | Create/apply migrations in development           |
+| `npm run db:migrate:deploy`  | Apply pending migrations (scripts / one-off)     |
+| `npm test`                   | Vitest (scoring + shuffle helpers)               |
+| `npm run db:push`            | Apply schema to DB (local experiments)           |
+| `npm run db:seed`            | Theme presets                                    |
 
 ## Production notes
 
